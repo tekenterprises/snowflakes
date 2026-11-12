@@ -15,15 +15,19 @@ function intersect(p,q){let out=p;for(let i=0;i<q.length&&out.length>=3;i++){con
 function projection(p,t){const dx=t.end[0]-t.start[0],dy=t.end[1]-t.start[1],L=Math.hypot(dx,dy);return {u:((p[0]-t.start[0])*dx+(p[1]-t.start[1])*dy)/(L*L),w:((p[1]-t.start[1])*dx-(p[0]-t.start[0])*dy)/L};}
 function point(t,u,w){const dx=t.end[0]-t.start[0],dy=t.end[1]-t.start[1],L=Math.hypot(dx,dy);return [t.start[0]+u*dx-w*dy/L,t.start[1]+u*dy+w*dx/L]}
 function sample(values,u,side){const k=clamp(u,0,1)*R.STEPS,i=Math.min(R.STEPS-1,Math.floor(k)),z=k-i;return values[i][side]*(1-z)+values[i+1][side]*z}
-function primitives(t,values,detail,scale){const result=[],count=R.STEPS;
- function fit(i,j,depth){const ring=values.slice(i,j+1).map((v,k)=>point(t,(i+k)/count,v[0]*scale)).concat(values.slice(i,j+1).map((v,k)=>point(t,(i+k)/count,v[1]*scale)).reverse()),h=hull(ring);if(h.length<3)return;const anchors=[point(t,i/count,values[i][0]*scale),point(t,i/count,values[i][1]*scale),point(t,j/count,values[j][0]*scale),point(t,j/count,values[j][1]*scale)];let p;try{p=PF.fit(h,point(t,i/count,0),point(t,j/count,0),detail,anchors)}catch{p=hull(anchors)}
-  const root=t.parent===null,excess=Math.abs(signed(h))/Math.max(.001,Math.abs(signed(ring))),missing=Math.abs(signed(p))/Math.abs(signed(h)),limit=root?1.15:1.3;
-  if((excess>limit+.3*(1-detail/100)||missing<.92-.12*(1-detail/100))&&depth<(root?2:detail>=60?1:0)&&(j-i)*t.length/count>3*scale){const middle=Math.round((i+j)/2);fit(i,middle,depth+1);fit(middle,j,depth+1)}else result.push(p);
+// Public 50% is the former maximum. Above it, tighten measured-profile error
+// and permit deeper adaptive splits; do not subdivide flat regions merely to
+// increase the polygon count. Branch selection saturates at the old maximum.
+const structureDetail=detail=>Math.min(100,Math.max(0,detail)*2);
+function primitives(t,values,detail,scale){const result=[],count=R.STEPS,base=Math.min(100,detail),extra=Math.max(0,detail-100)/100;
+ function fit(i,j,depth){const ring=values.slice(i,j+1).map((v,k)=>point(t,(i+k)/count,v[0]*scale)).concat(values.slice(i,j+1).map((v,k)=>point(t,(i+k)/count,v[1]*scale)).reverse()),h=hull(ring);if(h.length<3)return;const anchors=[point(t,i/count,values[i][0]*scale),point(t,i/count,values[i][1]*scale),point(t,j/count,values[j][0]*scale),point(t,j/count,values[j][1]*scale)];let p;try{p=PF.fit(h,point(t,i/count,0),point(t,j/count,0),base,anchors)}catch{p=hull(anchors)}
+  const root=t.parent===null,excess=Math.abs(signed(h))/Math.max(.001,Math.abs(signed(ring))),missing=Math.abs(signed(p))/Math.abs(signed(h)),limit=(root?1.15:1.3)*(1-extra)+(root?1.04:1.08)*extra;
+  if((excess>limit+.3*(1-base/100)||missing<.92+.06*extra-.12*(1-base/100))&&depth<(root?2:base>=60?1:0)+Math.ceil(extra)&&j-i>1&&(j-i)*t.length/count>(3-1.5*extra)*scale){const middle=Math.round((i+j)/2);fit(i,middle,depth+1);fit(middle,j,depth+1)}else result.push(p);
  }
  fit(0,count,0);return result;
 }
 function build(model,detail,hub,localHub){
- const profiles=R.measure(model).profiles,ideal=S.deform(model,detail,100),groups=new Map(),means=new Map();
+ const profiles=R.measure(model).profiles,ideal=S.deform(model,Math.min(100,detail),100),groups=new Map(),means=new Map();
  for(const t of model.tree){if(!groups.has(t.slotId))groups.set(t.slotId,[]);groups.get(t.slotId).push(profiles[t.id].map(v=>t.mirror?[-v[1],-v[0]]:v));}
  for(const [id,records] of groups){const values=records[0].map((_,i)=>[0,1].map(s=>mean(records.map(p=>p[i][s]))));if(model.slots[id].parent===null)for(const v of values){const w=(v[1]-v[0])/2;v[0]=-w;v[1]=w}means.set(id,values)}
  const c=model.n*model.scale/2,axis=model.axis,r=c*6,wedge=[[c,c],[c+r*Math.cos(axis),c+r*Math.sin(axis)],[c+r*Math.cos(axis+Math.PI/6),c+r*Math.sin(axis+Math.PI/6)]],half=ideal.filter(t=>t.arm===0&&!t.mirror),claimed=[hull(hub.polygon)],base=[];
@@ -85,10 +89,13 @@ function resolveConstraints(source){const index=new Map(),low=new Map(),active=n
 function conform(mesh,positions){for(const [id,e] of mesh.constraints)positions[id]=[0,1].map(k=>e.weights.reduce((s,[free,w])=>s+positions[free][k]*w,0));return positions;}
 
 function overlaps(p,q,epsilon=1e-7){return !p.some((a,i)=>q.every(v=>cross(a,p[(i+1)%p.length],v)<=epsilon))&&!q.some((a,i)=>p.every(v=>cross(a,q[(i+1)%q.length],v)<=epsilon));}
-function valid(mesh,positions){const polygons=mesh.faces.map(f=>f.ids.map(i=>positions[i])),boxes=[];for(const p of polygons){if(signed(p)<1e-8||p.some((v,i)=>cross(p[(i+p.length-1)%p.length],v,p[(i+1)%p.length])< -1e-7))return false;boxes.push([Math.min(...p.map(v=>v[0])),Math.min(...p.map(v=>v[1])),Math.max(...p.map(v=>v[0])),Math.max(...p.map(v=>v[1]))]);}
+// Checking adjacent turns alone admits star-shaped self-intersections. Every
+// vertex must lie inside every oriented edge of a convex cell.
+function convex(p){return p.every((a,i)=>p.every(v=>cross(a,p[(i+1)%p.length],v)>=-1e-7));}
+function valid(mesh,positions){const polygons=mesh.faces.map(f=>f.ids.map(i=>positions[i])),boxes=[];for(const p of polygons){if(signed(p)<1e-8||!convex(p))return false;boxes.push([Math.min(...p.map(v=>v[0])),Math.min(...p.map(v=>v[1])),Math.max(...p.map(v=>v[0])),Math.max(...p.map(v=>v[1]))]);}
  const order=boxes.map((_,i)=>i).sort((a,b)=>boxes[a][0]-boxes[b][0]);for(let i=0;i<order.length;i++){const a=order[i],A=boxes[a];for(let j=i+1;j<order.length;j++){const b=order[j],B=boxes[b];if(B[0]>=A[2]-1e-7)break;if(B[1]>=A[3]-1e-7||A[1]>=B[3]-1e-7)continue;if(overlaps(polygons[a],polygons[b]))return false;}}return true;
 }
-function fitImage(mesh,model,localHub){const local=S.deform(model,mesh.detail,0),goals=mesh.vertices.map((p,i)=>{const ids=[...mesh.owners[i]];if(!ids.length)return p.slice();const candidates=ids.map(id=>{const t=mesh.ideal[id],dest=local[id],v=projection(p,t),side=v.w<0?0:1,canonical=mesh.means.get(t.slotId),source=mesh.profiles[dest.localId],canonWidth=Math.abs(sample(canonical,v.u,t.mirror?1-side:side)),localWidth=Math.abs(sample(source,v.u,side)),ratio=clamp(localWidth/Math.max(.25,canonWidth),.25,4);return point(dest,v.u,v.w*ratio)});return [0,1].map(k=>mean(candidates.map(v=>v[k])))});
+function fitImage(mesh,model,localHub){const local=S.deform(model,Math.min(100,mesh.detail),0),goals=mesh.vertices.map((p,i)=>{const ids=[...mesh.owners[i]];if(!ids.length)return p.slice();const candidates=ids.map(id=>{const t=mesh.ideal[id],dest=local[id],v=projection(p,t),side=v.w<0?0:1,canonical=mesh.means.get(t.slotId),source=mesh.profiles[dest.localId],canonWidth=Math.abs(sample(canonical,v.u,t.mirror?1-side:side)),localWidth=Math.abs(sample(source,v.u,side)),ratio=clamp(localWidth/Math.max(.25,canonWidth),.25,4);return point(dest,v.u,v.w*ratio)});return [0,1].map(k=>mean(candidates.map(v=>v[k])))});
  if(localHub)mesh.coreIds.forEach((id,k)=>goals[id]=localHub.polygon[k].slice());
  mesh.goals=goals;
  // Core and seam vertices are shared; one feasible mesh is fitted for all arms.
@@ -103,7 +110,7 @@ function fitImage(mesh,model,localHub){const local=S.deform(model,mesh.detail,0)
  const polygons=mesh.faces.map(f=>f.ids.map(i=>positions[i])),box=p=>[Math.min(...p.map(v=>v[0])),Math.min(...p.map(v=>v[1])),Math.max(...p.map(v=>v[0])),Math.max(...p.map(v=>v[1]))],boxes=polygons.map(box),incident=mesh.vertices.map(()=>[]),dependents=mesh.vertices.map(()=>[]);
  mesh.faces.forEach((f,i)=>f.ids.forEach(id=>incident[id].push(i)));for(const [id,e] of mesh.constraints)for(const [free] of e.weights)dependents[free].push(id);
  const influence=mesh.vertices.map((_,i)=>{const ids=new Set();function visit(k){if(ids.has(k))return;ids.add(k);dependents[k].forEach(visit)}visit(i);return [...new Set([...ids].flatMap(id=>incident[id]))]});
- function moveValid(trial,affected){const changed=new Map(affected.map(id=>[id,mesh.faces[id].ids.map(i=>trial[i])]));for(const [id,p] of changed){if(signed(p)<1e-8||p.some((v,i)=>cross(p[(i+p.length-1)%p.length],v,p[(i+1)%p.length])< -1e-7))return null;const A=box(p);for(let j=0;j<polygons.length;j++){if(j===id)continue;const q=changed.get(j)||polygons[j],B=changed.has(j)?box(q):boxes[j];if(A[0]>=B[2]-1e-7||B[0]>=A[2]-1e-7||A[1]>=B[3]-1e-7||B[1]>=A[3]-1e-7)continue;if(overlaps(p,q))return null;}}return changed;}
+ function moveValid(trial,affected){const changed=new Map(affected.map(id=>[id,mesh.faces[id].ids.map(i=>trial[i])]));for(const [id,p] of changed){if(signed(p)<1e-8||!convex(p))return null;const A=box(p);for(let j=0;j<polygons.length;j++){if(j===id)continue;const q=changed.get(j)||polygons[j],B=changed.has(j)?box(q):boxes[j];if(A[0]>=B[2]-1e-7||B[0]>=A[2]-1e-7||A[1]>=B[3]-1e-7||B[1]>=A[3]-1e-7)continue;if(overlaps(p,q))return null;}}return changed;}
  function fitFaces(){for(const face of mesh.faces){const ids=face.ids.filter(i=>!mesh.constraints.has(i));if(!ids.some(i=>Math.hypot(...positions[i].map((v,k)=>v-goals[i][k]))>.1))continue;const affected=[...new Set(ids.flatMap(i=>influence[i]))];for(const alpha of [1,.5,.25]){const trial=positions.map(p=>p.slice());for(const i of ids)trial[i]=positions[i].map((v,k)=>v+alpha*(goals[i][k]-v));conform(mesh,trial);const changed=moveValid(trial,affected);if(changed){positions=trial;for(const [id,p] of changed){polygons[id]=p;boxes[id]=box(p)}break}}}}
  fitFaces();
  for(let pass=0;pass<4;pass++)for(let i=0;i<positions.length;i++){if(mesh.constraints.has(i)||Math.hypot(...positions[i].map((v,k)=>v-goals[i][k]))<.1)continue;let best=null;const delta=goals[i].map((v,k)=>v-positions[i][k]),distance=delta[0]**2+delta[1]**2;
@@ -113,10 +120,10 @@ function fitImage(mesh,model,localHub){const local=S.deform(model,mesh.detail,0)
 
  fitFaces();return positions;
 }
-function fit(model,detail,symmetry,hub,localHub){let details=cache.get(model);if(!details){details=new Map();cache.set(model,details)}let mesh=details.get(detail);if(!mesh){mesh=build(model,detail,hub,localHub);details.set(detail,mesh)}const z=1-symmetry/100;let vertices=z===1?mesh.faithful.map(p=>p.slice()):z===0?mesh.vertices.map(p=>p.slice()):mesh.vertices.map((p,i)=>p.map((v,k)=>v+z*(mesh.faithful[i][k]-v)));
+function fit(model,detail,symmetry,hub,localHub){let details=cache.get(model);if(!details){details=new Map();cache.set(model,details)}let mesh=details.get(detail);if(!mesh){mesh=build(model,clamp(detail,0,100)*2,hub,localHub);details.set(detail,mesh)}const z=1-symmetry/100;let vertices=z===1?mesh.faithful.map(p=>p.slice()):z===0?mesh.vertices.map(p=>p.slice()):mesh.vertices.map((p,i)=>p.map((v,k)=>v+z*(mesh.faithful[i][k]-v)));
  if(!valid(mesh,vertices)){let alpha=z;do{alpha*=.5;vertices=mesh.vertices.map((p,i)=>p.map((v,k)=>v+alpha*(mesh.faithful[i][k]-v)))}while(alpha>1e-5&&!valid(mesh,vertices));if(!valid(mesh,vertices))vertices=mesh.vertices;}
  const pieces=mesh.faces.map(f=>{const polygon=f.ids.map(i=>vertices[i]),center=[0,1].map(k=>mean(polygon.map(p=>p[k])));return {...f,vertexIds:f.ids,polygon,start:center,end:center,u0:0,u1:1,error:0}});
  return {pieces,loops:mesh.boundaries.map(ids=>ids.map(i=>vertices[i])),cutPolygons:mesh.faces.map(f=>f.cutIds.map(i=>vertices[i])),vertices,template:mesh};
 }
-root.SharedMesh={fit,valid,overlaps};if(typeof module!=='undefined')module.exports=root.SharedMesh;
+root.SharedMesh={fit,valid,overlaps,structureDetail};if(typeof module!=='undefined')module.exports=root.SharedMesh;
 })(globalThis);

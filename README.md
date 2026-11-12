@@ -19,7 +19,7 @@ The compact interface keeps the version beside the title. Crystal geometry is an
 
 The original cut trace uses a 768 px artboard with thresholding, hole filling, component filtering, detail reduction, offset and rounding. Preview bounds include both the image subject and cut shape without changing export dimensions. Vector, Branches, Image, and Crystal geo are independent layer buttons. Any nonempty combination is allowed; the last visible layer cannot be switched off. Crystal geo displays polygon guides even when the separate “Use crystal geometry for cut” checkbox is off. Layer selection never changes the exported cut.
 
-## Image → shared structure → polygons (v26)
+## Image → shared structure → polygons (v27)
 
 `branch-structure.js` remains the image-only candidate detector. At up to 384 px, it measures six trunk axes and follows image geodesics, grayscale ridges, paired edges and medial clearance. Continuous junction searches locate each child on its parent. The detector rejects crossing lines and duplicate terminal edges. No reference numbers, annotated coordinates or specimen-specific corrections enter runtime code.
 
@@ -35,7 +35,7 @@ Detail selects branch slots globally. Symmetry changes local geometry toward the
 
 At full symmetry the cells are exact rotated/reflected copies. At lower settings the same mesh deforms toward the image. Collinear T-junction groups are flattened, and remaining cyclic affine constraints are solved once as weights on free vertices. Cut boundaries are stitched from shared edge identities with matching subsegments on both sides. This prevents independent vertex motion or coordinate rounding from opening cracks. The central hexagon remains one six-sided cell.
 
-The geometry is a compact structural interpretation, not a claim to recover every physical crystal facet or every contour pixel. Detail selects common branch slots and controls common subdivisions. Fewer faces deliberately smooth small outline features; source pixels, branch overlays and the raw trace remain available for comparison. `shared-polygons.js` retains the registered raw-profile trace used by non-crystal symmetry; its previous strip fitter remains available for diagnostic tests.
+The geometry is a compact structural interpretation, not a claim to recover every physical crystal facet or every contour pixel. Crystal Detail at 50% reproduces the v26 maximum. The lower half selects common branch slots and compact subdivisions; 50–100% tightens measured-profile error and permits deeper adaptive subdivisions to retain smaller notches and tips. Flat regions do not subdivide simply because the slider increases. Raw non-crystal trace detail keeps its existing range. Fewer faces deliberately smooth small outline features; source pixels, branch overlays and the raw trace remain available for comparison. `shared-polygons.js` retains the registered raw-profile trace used by non-crystal symmetry; its previous strip fitter remains available for diagnostic tests.
 
 `crystal-core.js` searches central hexagon scale, orientation and small center offsets against grayscale edge evidence on all six sides. It supplies an explicit six-sided hub to the polygon union. A uniformly dark center cannot qualify as a detected hexagon. Faint/ambiguous cores use a conservative inferred hub, reported in Details & help. At full symmetry the core shares the flake's center and compatible orientation.
 
@@ -68,6 +68,7 @@ node tests/branch-measurements.cjs
 node tests/branch-stability.cjs
 node tests/polygon-sides.cjs
 node tests/shared-mesh.cjs
+node tests/crystal-detail.cjs
 node tests/branch-regions.cjs
 node tests/branch-controls.cjs
 node tests/rooted-tree.cjs

@@ -8,3 +8,6 @@ for(let arm=0;arm<6;arm++)for(const mirror of [false,true])assert.deepEqual(zero
 for(const symmetry of [0,25,50,75,100]){const r=M.fit(model,100,symmetry,hub,hub);assert(M.valid(r.template,r.vertices));assert(r.pieces.every(p=>p.sideCount>=3&&p.sideCount<=6));}
 const active=new Set(),done=new Set();function visit(id){assert(!active.has(id),'no cyclic shared-edge dependencies');if(done.has(id))return;active.add(id);const e=zero.template.constraints.get(id);if(e)for(const [free] of e.weights){assert(!zero.template.constraints.has(free),'resolved junctions depend only on free vertices');visit(free)}active.delete(id);done.add(id)}zero.vertices.forEach((_,i)=>visit(i));
 console.log('Shared mesh: twelve matching half-arms, fixed 3–6-side definitions, valid fitted/intermediate poses and acyclic junction constraints.');
+
+const star=Array.from({length:5},(_,i)=>[Math.cos(i*4*Math.PI/5),Math.sin(i*4*Math.PI/5)]);
+assert(!M.valid({faces:[{ids:[0,1,2,3,4]}]},star),'positive adjacent turns must not admit a self-intersecting pentagram');
