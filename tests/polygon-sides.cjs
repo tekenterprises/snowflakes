@@ -7,8 +7,11 @@ for(let i=1;i<=10;i++){
  for(const symmetry of [0,50,100])for(const detail of [0,100])for(const strength of [1,100]){
   const r=I.fit(pixels,768,strength,false,detail,symmetry,model);assert.equal(r.polygons.length,r.pieces.length);
   r.polygons.forEach((p,j)=>{assert(p.length>=3&&p.length<=6,`reference ${i}: ${p.length} sides`);assert(P.area(p)>0);assert(p.flat().every(Number.isFinite));assert(contains(p,r.pieces[j].start),'retain piece attachment');assert(contains(p,r.pieces[j].end),'retain piece endpoint')});
-  for(const t of r.tree){const pieces=r.pieces.filter(p=>p.branchId===t.id);assert.equal(pieces[0].u0,0);assert.equal(pieces.at(-1).u1,1);assert(Math.hypot(...pieces[0].start.map((v,k)=>v-t.start[k]))<1e-6);assert(Math.hypot(...pieces.at(-1).end.map((v,k)=>v-t.end[k]))<1e-6);for(let j=1;j<pieces.length;j++){assert.equal(pieces[j-1].u1,pieces[j].u0);assert.deepEqual(pieces[j-1].end,pieces[j].start)}}
+  // Partition cells share boundaries; they are no longer overlapping branch
+  // ribbons with repeated centerline start/end anchors.
+  for(const p of r.pieces){assert.equal(p.sideCount,p.polygon.length);assert(p.vertexIds?.length===p.sideCount);}
+
   assert.equal(r.loops.filter(p=>C.area(p)>0).length,1,'side reduction must preserve one connected cut');
  }
- console.log(`Reference ${i}: 3–6 sides, branch anchors and connected cut verified across strength/detail/symmetry.`);
+ console.log(`Reference ${i}: 3–6 sides, cell identities and connected cut verified across strength/detail/symmetry.`);
 }
