@@ -1,0 +1,14 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),refs=require('../dist/references.js');
+assert.equal(refs.length,20);assert.equal(new Set(refs.map(r=>r.id)).size,20);assert.deepEqual(refs.slice(16).map(r=>r.number),['1018','542A','591','332']);
+const elements=new Map(),pending=[];
+function node(){return {children:[],listeners:{},value:0,checked:false,style:{},classList:{toggle(){}},setAttribute(k,v){this[k]=v},addEventListener(k,v){this.listeners[k]=v},append(...n){this.children.push(...n)},after(){},closest(){return this},click(){},set innerHTML(v){this.children=[];this.html=v},get innerHTML(){return this.html||''}}}
+const get=id=>{if(!elements.has(id))elements.set(id,node());return elements.get(id)};
+const pixels=new Uint8Array(768*768*4).fill(255),draws=[];
+const ctx={fillRect(){},save(){},translate(){},rotate(){},drawImage(...args){draws.push(args)},restore(){},getImageData(){return {data:pixels}}};
+const c=vm.createContext({ReferenceLibrary:refs,console,setTimeout,clearTimeout,URL:{revokeObjectURL(){}},Image:class{constructor(){this.width=this.height=1000;pending.push(this)}},document:{getElementById:get,createElement(t){return t==='canvas'?{...node(),getContext(){return ctx},toDataURL(){return 'data:image/png;base64,fixture'}}:node()},querySelector:()=>node(),querySelectorAll:()=>get('cells').children},Flake:{findCenter(){return {found:false}},path(){return 'M0,0L1,0L0,1Z'}},Preview:{fitBounds(){return [0,0,768,768]}},CutOutput:{process(){return {loops:[[[0,0],[1,0],[0,1]]],components:1,removed:0}}}});
+vm.runInContext(fs.readFileSync('dist/app.js','utf8'),c);pending.at(-1).onload();
+for(let i=0;i<20;i++){get('cells').children[i].onclick();const im=pending.at(-1);assert.equal(im.src,refs[i].file);im.onload();assert.equal(get('layout').value,'single');assert.equal(get('cells').children.length,20);assert(get('specimen').textContent.includes(refs[i].label));assert.equal(get('cells').children[i]['aria-pressed'],'true');assert.equal(vm.runInContext('crop.width',c),1000)}
+vm.runInContext("load('blob:sheet','Test sheet',true)",c);const sheet=pending.at(-1);sheet.width=5000;sheet.height=2000;sheet.onload();assert.equal(get('cells').children.length,10);get('cells').children[9].onclick();assert.equal(get('specimen').textContent,'Uploaded sheet · Crystal 10');assert(draws.some(a=>a[0]===sheet&&a[1]===4000&&a[2]===1000&&a[3]===1000&&a[4]===1000),'last uploaded sheet cell is cropped correctly');
+vm.runInContext('selectReference(16);selectReference(19)',c);const [older,newer]=pending.slice(-2);newer.onload();older.onload();assert(get('specimen').textContent.includes(refs[19].label),'stale loads must not replace the selected reference');assert.equal(get('cells').children.length,20);
+assert(!get('status').textContent?.startsWith('Could not trace'));
+console.log('All 20 individual references, final selection, uploaded sheet cells, return to library and load races pass.');

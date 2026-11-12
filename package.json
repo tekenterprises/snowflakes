@@ -1,0 +1,12 @@
+{
+  "name": "snowflake-studio",
+  "version": "24.0.0",
+  "private": true,
+  "description": "Browser-local snowflake reconstruction and laser-cut SVG editor",
+  "scripts": {
+    "build": "node scripts/check-static.cjs",
+    "dev": "python3 -m http.server 8787 --directory dist",
+    "test": "node tests/reference-library.cjs && node tests/preview-independence.cjs"
+  },
+  "engines": { "node": ">=20" }
+}

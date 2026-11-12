@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Snowflake Studio — Crystal to cut</title><link rel="stylesheet" href="style.css?v=24">
+</head>
+<body>
+<header>
+ <a class="brand" href="./"><span class="mark" aria-hidden="true">❄</span><span>Snowflake <b>Studio</b></span><small class="version" aria-label="Version 24">v24</small></a>
+ <button id="reset" class="quiet" title="Reset adjustments">Reset ↺</button>
+</header>
+<main class="editor">
+ <section class="visual panel"><div class="drawing"><svg id="preview" viewBox="0 0 384 384" role="img" aria-label="Live snowflake cut shape"></svg></div></section>
+ <aside class="panel inspector"><div class="inspector-scroll">
+  <div class="stagehead"><h2 id="specimen">Fern dendrite</h2><div class="segmented" role="group" aria-label="Visible layers"><button id="cut" class="active" aria-pressed="true">Vector</button><button id="structure" aria-pressed="false">Branches</button><button id="overlay" class="active" aria-pressed="true">Image</button><button id="crystal-layer" aria-pressed="false">Crystal geo</button></div></div>
+  <div class="specimen-strip"><div id="cells" hidden></div></div>
+  <p id="preview-hint" class="preview-hint" hidden></p>
+  <label class="toggle" for="crystal"><input id="crystal" type="checkbox">Use crystal geometry for cut</label>
+  <div class="control"><label for="symmetry">Symmetry <output id="symmetryVal"></output></label><input id="symmetry" type="range" min="0" max="100" value="0"><div class="ends"><span>Faithful</span><span>Sixfold</span></div></div>
+  <div class="control"><label for="detail">Detail <output id="detailVal"></output></label><input id="detail" type="range" min="0" max="100" value="100"></div>
+   <div class="control"><label for="offset">Outline spacing <output id="offsetVal"></output></label><input id="offset" type="range" min="0" max="2.5" step="0.1" value="0"></div>
+   <div class="control"><label for="round">Curve radius <output id="roundVal"></output></label><input id="round" type="range" min="0" max="2" step="0.1" value="0"></div>
+  <div class="control"><label for="gaps">Close gaps <output id="gapsVal"></output></label><input id="gaps" type="range" min="0" max="5" step="0.1" value="0" title="Closes openings up to this width, in millimeters"></div>
+  <div class="toggle-grid">
+   <label class="toggle" for="fill"><input id="fill" type="checkbox" checked>Fill interior holes</label>
+   <label class="toggle" for="islands"><input id="islands" type="checkbox" checked>Largest piece only</label>
+  </div>
+  <label class="toggle" for="hanger"><input id="hanger" type="checkbox">Hanger hole</label>
+  <div id="hanger-controls" hidden>
+   <div class="control"><label for="holeDiameter">Hole diameter <output id="holeDiameterVal"></output></label><input id="holeDiameter" type="range" min="1" max="8" step="0.1" value="3"></div>
+   <div class="control"><label for="holeRim">Rim thickness <output id="holeRimVal"></output></label><input id="holeRim" type="range" min="0.5" max="4" step="0.1" value="1.5"></div>
+   <div class="control"><label for="holeNeck">Neck length <output id="holeNeckVal"></output></label><input id="holeNeck" title="Distance from the flake tip to the nearest edge of the hole" type="range" min="0" max="8" step="0.5" value="1"></div>
+  </div>
+  <div class="row size-row"><label for="size">Artboard size</label><div class="unit"><input id="size" type="number" min="20" max="500" step="5" value="100"><span>mm</span></div></div>
+  <span id="sizeLabel" class="sr-only">100 mm artboard</span>
+  <details class="image-controls"><summary>Image & alignment</summary>
+   <div class="center-tools"><span id="center-status">Finding center…</span><button id="auto-center">Auto-center</button><button id="set-center" aria-pressed="false">Set center</button></div>
+   <label class="upload" tabindex="0">＋ Upload photograph<input id="upload" type="file" accept="image/png,image/jpeg,image/webp,image/bmp"></label>
+   <div class="row"><label for="layout">Layout</label><select id="layout"><option value="single">Single crystal</option><option value="sheet">5 × 2 reference sheet</option></select></div>
+   <label class="toggle" for="invert"><input type="checkbox" id="invert">Light flake / dark background</label>
+   <div class="control"><label for="threshold">Background threshold <output id="thresholdVal"></output></label><input id="threshold" type="range" min="20" max="245" value="230"></div>
+   <div class="control"><label for="scale">Source scale <output id="scaleVal"></output></label><input id="scale" type="range" min="55" max="160" value="90"></div>
+   <div class="control"><label for="angle">Rotation <output id="angleVal"></output></label><input id="angle" type="range" min="-30" max="30" value="0"></div>
+   <div class="demos"><button data-demo="fern">Demo fern</button><button data-demo="stellar">Stellar</button><button data-demo="plate">Plate</button></div>
+  </details>
+  <details><summary>Details & help</summary>
+   <p id="crystal-stats" role="status"></p>
+   <p>Corresponding arms share branch and polygon definitions. Detail controls smaller features; symmetry adjusts their shape. Crystal geometry adds an image-fitted central hexagon; faint cores are inferred.</p>
+   <p>Close gaps bridges narrow openings. The hanger adds an external rimmed loop above the flake, joined by a short neck. Neck length measures from the tip to the hole edge. Hole filling and gap closing preserve its opening.</p>
+   <p>The four top buttons independently show layers; at least one stays visible. Crystal geo shows polygon guides. Use crystal geometry for cut chooses the exported shape. The SVG contains only closed cut boundaries, in millimeters.</p>
+   <p>References 11–20: Wilson A. Bentley, Smithsonian Institution Archives. <a href="sources.html" target="_blank" rel="noopener">Photo credits</a>.</p>
+   <p>Images stay in your browser. Check narrow features before cutting; kerf compensation is not applied.</p>
+  </details>
+  <div class="stagefoot"><span><i class="dot"></i><b id="pathcount">1 closed boundary</b></span><span id="vertices">— vertices</span></div>
+  <p class="note" id="status" role="status" hidden></p>
+ </div><div class="export-dock"><button id="export">Download cut SVG <span aria-hidden="true">↗</span></button></div></aside>
+</main>
+<script src="engine.js?v=24"></script><script src="preview.js?v=24"></script><script src="vendor/earcut.min.js?v=24"></script><script src="crystal.js?v=24"></script><script src="vendor/polygon-clipping.min.js?v=24"></script><script src="vendor/clipper.js?v=24"></script><script src="branch-structure.js?v=24"></script><script src="polygon-fit.js?v=24"></script><script src="branch-regions.js?v=24"></script><script src="branch-tips.js?v=24"></script><script src="structural-model.js?v=24"></script><script src="shared-polygons.js?v=24"></script><script src="crystal-core.js?v=24"></script><script src="image-crystal.js?v=24"></script><script src="exact-symmetry.js?v=24"></script><script src="cut-features.js?v=24"></script><script src="cut-output.js?v=24"></script><script src="references.js?v=24"></script><script src="app.js?v=24"></script>
+</body></html>

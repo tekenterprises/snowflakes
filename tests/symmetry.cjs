@@ -1,0 +1,4 @@
+const assert=require('node:assert/strict'),F=require('../dist/engine.js');
+function crystal(n,cx,cy){let a=new Uint8Array(n*n);for(let y=0;y<n;y++)for(let x=0;x<n;x++){let dx=x+.5-cx,dy=y+.5-cy;for(let k=0;k<6;k++){let t=k*Math.PI/3,xx=dx*Math.cos(t)+dy*Math.sin(t),yy=-dx*Math.sin(t)+dy*Math.cos(t);if((xx-25)**2/30**2+yy**2/7**2<1)a[y*n+x]=1}}return a}
+for(const [cx,cy] of [[82,107],[106.3,75.6],[96,96]]){let a=crystal(192,cx,cy),found=F.findCenter(a,192);assert(Math.hypot(found.x-cx,found.y-cy)<1,JSON.stringify(found));console.log('Detected',found.x.toFixed(2),found.y.toFixed(2),'expected',cx,cy)}
+const a=crystal(192,96,96),b=F.averageArms(a,192,1);let xor=a.reduce((s,v,i)=>s+(v!==b[i]),0),area=a.reduce((s,v)=>s+v,0);assert(xor/area<.04);assert(Math.abs(b.reduce((s,v)=>s+v,0)-area)/area<.02);console.log('Symmetric input retained; area difference below 2%.');assert.equal(F.findCenter(new Uint8Array(192*192),192).found,false);
