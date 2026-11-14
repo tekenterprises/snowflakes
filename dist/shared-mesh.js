@@ -4,6 +4,7 @@
 const R=typeof module!=='undefined'?require('./branch-regions.js'):root.BranchRegions;
 const S=typeof module!=='undefined'?require('./structural-model.js'):root.StructuralModel;
 const PF=typeof module!=='undefined'?require('./polygon-fit.js'):root.PolygonFit;
+const Surface=typeof module!=='undefined'?require('./silhouette-mesh.js'):root.SilhouetteMesh;
 const cache=new WeakMap(),clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
 const signed=p=>p.reduce((v,a,i)=>{const b=p[(i+1)%p.length];return v+a[0]*b[1]-a[1]*b[0]},0)/2;
@@ -31,7 +32,9 @@ function build(model,detail,hub,localHub){
  for(const t of model.tree){if(!groups.has(t.slotId))groups.set(t.slotId,[]);groups.get(t.slotId).push(profiles[t.id].map(v=>t.mirror?[-v[1],-v[0]]:v));}
  for(const [id,records] of groups){const values=records[0].map((_,i)=>[0,1].map(s=>mean(records.map(p=>p[i][s]))));if(model.slots[id].parent===null)for(const v of values){const w=(v[1]-v[0])/2;v[0]=-w;v[1]=w}means.set(id,values)}
  const c=model.n*model.scale/2,axis=model.axis,r=c*6,wedge=[[c,c],[c+r*Math.cos(axis),c+r*Math.sin(axis)],[c+r*Math.cos(axis+Math.PI/6),c+r*Math.sin(axis+Math.PI/6)]],half=ideal.filter(t=>t.arm===0&&!t.mirror),claimed=[hull(hub.polygon)],base=[];
- for(const t of half){const region=[];for(const source of primitives(t,means.get(t.slotId),detail,model.scale)){const p=intersect(source,wedge);if(p.length<3)continue;let parts=[p];for(const q of claimed)parts=parts.flatMap(v=>subtract(v,q));region.push(...parts);claimed.push(p)}
+ const sourceGroups=detail>100?half.map(t=>({slotId:t.slotId,polygons:primitives(t,means.get(t.slotId),detail,model.scale).map(p=>intersect(p,wedge)).filter(p=>p.length>=3)})):null,material=sourceGroups?Surface.material(model,ideal,detail,wedge,sourceGroups):null;
+ if(material){for(const group of Surface.partition(material,hull(hub.polygon),sourceGroups)){merge(group.polygons).forEach((polygon,i)=>base.push({slotId:group.slotId,pieceSlotId:group.slotId+':'+i,polygon}));}}
+ else for(const t of half){const region=[];for(const source of primitives(t,means.get(t.slotId),detail,model.scale)){const p=intersect(source,wedge);if(p.length<3)continue;let parts=[p];for(const q of claimed)parts=parts.flatMap(v=>subtract(v,q));region.push(...parts);claimed.push(p)}
   const polygons=merge(region);polygons.forEach((polygon,i)=>base.push({slotId:t.slotId,pieceSlotId:t.slotId+':'+i,polygon}));
  }
  const vertices=[],faces=[],lookup=new Map(),owners=[];
@@ -52,7 +55,8 @@ function build(model,detail,hub,localHub){
  // Export uses the same subsegments on both sides of every shared edge. This
  // prevents coordinate rounding from turning a T-junction into a hairline gap.
  const resolved=resolveConstraints(constraints);constraints.clear();for(const [id,row] of resolved)constraints.set(id,row);
- const mesh={vertices,faces,owners,ideal,means,profiles,constraints,coreIds,detail};
+ const mesh={vertices,faces,owners,ideal,means,profiles,constraints,coreIds,detail,silhouette:!!material};
+ if(material){cutEdges(mesh);mesh.boundaries=boundaryEdges(mesh);mesh.exterior=new Set(mesh.boundaries.flat());}
  mesh.faithful=fitImage(mesh,model,localHub);
  // A shape that needs another facet on one observed arm gets that same facet
  // definition on every half-arm, rather than independently changing its topology.
@@ -88,14 +92,15 @@ function resolveConstraints(source){const index=new Map(),low=new Map(),active=n
 }
 function conform(mesh,positions){for(const [id,e] of mesh.constraints)positions[id]=[0,1].map(k=>e.weights.reduce((s,[free,w])=>s+positions[free][k]*w,0));return positions;}
 
-function overlaps(p,q,epsilon=1e-7){return !p.some((a,i)=>q.every(v=>cross(a,p[(i+1)%p.length],v)<=epsilon))&&!q.some((a,i)=>p.every(v=>cross(a,q[(i+1)%q.length],v)<=epsilon));}
-// Checking adjacent turns alone admits star-shaped self-intersections. Every
-// vertex must lie inside every oriented edge of a convex cell.
-function convex(p){return p.every((a,i)=>p.every(v=>cross(a,p[(i+1)%p.length],v)>=-1e-7));}
+function overlaps(p,q,epsilon=1e-7){const separates=(p,q)=>p.some((a,i)=>{const b=p[(i+1)%p.length],L=Math.hypot(b[0]-a[0],b[1]-a[1]);return L>1e-8&&q.every(v=>cross(a,b,v)<=epsilon*L)});return !separates(p,q)&&!separates(q,p);}
+// Every side must have nonzero length and contain all vertices on its inside.
+// A collapsed side cannot act as a false separating axis between overlapping cells.
+function convex(p){return p.every((a,i)=>{const b=p[(i+1)%p.length],L=Math.hypot(b[0]-a[0],b[1]-a[1]);return L>1e-6&&p.every(v=>cross(a,b,v)>=-1e-7*L)});}
 function valid(mesh,positions){const polygons=mesh.faces.map(f=>f.ids.map(i=>positions[i])),boxes=[];for(const p of polygons){if(signed(p)<1e-8||!convex(p))return false;boxes.push([Math.min(...p.map(v=>v[0])),Math.min(...p.map(v=>v[1])),Math.max(...p.map(v=>v[0])),Math.max(...p.map(v=>v[1]))]);}
  const order=boxes.map((_,i)=>i).sort((a,b)=>boxes[a][0]-boxes[b][0]);for(let i=0;i<order.length;i++){const a=order[i],A=boxes[a];for(let j=i+1;j<order.length;j++){const b=order[j],B=boxes[b];if(B[0]>=A[2]-1e-7)break;if(B[1]>=A[3]-1e-7||A[1]>=B[3]-1e-7)continue;if(overlaps(polygons[a],polygons[b]))return false;}}return true;
 }
 function fitImage(mesh,model,localHub){const local=S.deform(model,Math.min(100,mesh.detail),0),goals=mesh.vertices.map((p,i)=>{const ids=[...mesh.owners[i]];if(!ids.length)return p.slice();const candidates=ids.map(id=>{const t=mesh.ideal[id],dest=local[id],v=projection(p,t),side=v.w<0?0:1,canonical=mesh.means.get(t.slotId),source=mesh.profiles[dest.localId],canonWidth=Math.abs(sample(canonical,v.u,t.mirror?1-side:side)),localWidth=Math.abs(sample(source,v.u,side)),ratio=clamp(localWidth/Math.max(.25,canonWidth),.25,4);return point(dest,v.u,v.w*ratio)});return [0,1].map(k=>mean(candidates.map(v=>v[k])))});
+ if(mesh.silhouette)for(const i of mesh.exterior){if(mesh.coreIds.includes(i))continue;const arm=Math.max(0,mesh.faces.find(f=>f.ids.includes(i)&&f.arm!==undefined)?.arm||0);goals[i]=Surface.project(model,mesh.vertices[i],arm);}
  if(localHub)mesh.coreIds.forEach((id,k)=>goals[id]=localHub.polygon[k].slice());
  mesh.goals=goals;
  // Core and seam vertices are shared; one feasible mesh is fitted for all arms.

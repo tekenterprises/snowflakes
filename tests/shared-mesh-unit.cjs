@@ -11,3 +11,5 @@ console.log('Shared mesh: twelve matching half-arms, fixed 3–6-side definition
 
 const star=Array.from({length:5},(_,i)=>[Math.cos(i*4*Math.PI/5),Math.sin(i*4*Math.PI/5)]);
 assert(!M.valid({faces:[{ids:[0,1,2,3,4]}]},star),'positive adjacent turns must not admit a self-intersecting pentagram');
+const collapsed=[[0,0],[2,0],[2,0],[2,2],[0,2]];
+assert(!M.valid({faces:[{ids:[0,1,2,3,4]}]},collapsed),'collapsed edges cannot hide intersecting cells');

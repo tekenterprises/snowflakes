@@ -19,7 +19,7 @@ The compact interface keeps the version beside the title. Crystal geometry is an
 
 The original cut trace uses a 768 px artboard with thresholding, hole filling, component filtering, detail reduction, offset and rounding. Preview bounds include both the image subject and cut shape without changing export dimensions. Vector, Branches, Image, and Crystal geo are independent layer buttons. Any nonempty combination is allowed; the last visible layer cannot be switched off. Crystal geo displays polygon guides even when the separate “Use crystal geometry for cut” checkbox is off. Layer selection never changes the exported cut.
 
-## Image → shared structure → polygons (v27)
+## Image → shared structure → polygons (v28)
 
 `branch-structure.js` remains the image-only candidate detector. At up to 384 px, it measures six trunk axes and follows image geodesics, grayscale ridges, paired edges and medial clearance. Continuous junction searches locate each child on its parent. The detector rejects crossing lines and duplicate terminal edges. No reference numbers, annotated coordinates or specimen-specific corrections enter runtime code.
 
@@ -31,7 +31,7 @@ Every arm and its reflected side receives the same slot hierarchy. Local image m
 
 Detail selects branch slots globally. Symmetry changes local geometry toward the common measurements, without adding, deleting or fading branches. At full symmetry, the graph and corresponding polygons have exact rotational and reflection counterparts. Intermediate fitting also checks for crossing lines. The symmetry axis remains the circular mean of six measured trunk directions.
 
-`branch-regions.js` measures image-width profiles on the corrected branch scaffold. `shared-mesh.js` uses the matched profiles from all six arms and both sides to build one half-arm partition. Convex 3–6-sided cells are clipped against the core and previously allocated material, so their interiors do not overlap. The half-arm is mirrored and rotated twelve times; corresponding cells retain identical identities, counts, side counts and connectivity. Shared vertices can move toward each arm's measured branch positions and widths, subject to convexity and intersection checks. If an additional facet is needed for local deformation, that definition is added to every corresponding half-arm, not only to the difficult image region.
+`branch-regions.js` measures image-width profiles on the corrected branch scaffold. At high detail, `silhouette-mesh.js` checks the common branch footprint against the aligned image silhouette. Substantial missing or extra regions trigger image-constrained partitioning: existing branch regions allocate cells first, and remaining image-supported lobes receive cells in the same half-arm template. Fine pixel chatter alone does not trigger this correction. Boundary vertices are fitted back to the original image, within the common mesh constraints. `shared-mesh.js` uses the matched profiles from all six arms and both sides to build one half-arm partition. Convex 3–6-sided cells are clipped against the core and previously allocated material, so their interiors do not overlap. The half-arm is mirrored and rotated twelve times; corresponding cells retain identical identities, counts, side counts and connectivity. Shared vertices can move toward each arm's measured branch positions and widths, subject to convexity and intersection checks. If an additional facet is needed for local deformation, that definition is added to every corresponding half-arm, not only to the difficult image region.
 
 At full symmetry the cells are exact rotated/reflected copies. At lower settings the same mesh deforms toward the image. Collinear T-junction groups are flattened, and remaining cyclic affine constraints are solved once as weights on free vertices. Cut boundaries are stitched from shared edge identities with matching subsegments on both sides. This prevents independent vertex motion or coordinate rounding from opening cracks. The central hexagon remains one six-sided cell.
 
@@ -69,6 +69,7 @@ node tests/branch-stability.cjs
 node tests/polygon-sides.cjs
 node tests/shared-mesh.cjs
 node tests/crystal-detail.cjs
+node tests/silhouette-accuracy.cjs
 node tests/branch-regions.cjs
 node tests/branch-controls.cjs
 node tests/rooted-tree.cjs

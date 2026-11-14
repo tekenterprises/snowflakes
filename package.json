@@ -1,6 +1,6 @@
 {
   "name": "snowflake-studio",
-  "version": "27.0.0",
+  "version": "28.0.0",
   "private": true,
   "description": "Browser-local snowflake reconstruction and laser-cut SVG editor",
   "scripts": {
