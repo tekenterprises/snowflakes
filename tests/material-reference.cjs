@@ -12,7 +12,9 @@ for(const symmetry of [0,100]){
 }
 for(const ref of [18,19]){
  const pixels=new Uint8Array(fs.readFileSync(`/tmp/image-model-${ref}.rgba`)),e=E.analyze(pixels,n,false,230),fitted=I.fit(pixels,n,100,false,100,0,null,230),out=O.process(e.raw,n,{crystal:100,detail:100,symmetry:0,offset:0,round:0,gaps:0,size:100,islands:true,fill:false},fitted);
- let total=0,missing=0;for(let i=0;i<e.raw.length;i++)if(e.raw[i]){total++;missing+=!out.mask[i];}
- assert(missing/total<.005,`reference ${ref}: retain observed tips and material, not only voids`);
- console.log(`Reference ${ref}: ${(100*(1-missing/total)).toFixed(2)}% photographed material retained.`);
+ const target=C.raster([...require('../dist/engine').contours(e.filled,n,0),...require('../dist/engine').contours(e.holes,n,0)],n);
+ let total=0,missing=0,added=0;for(let i=0;i<target.length;i++){total+=target[i];missing+=target[i]&&!out.mask[i]?1:0;added+=out.mask[i]&&!target[i]?1:0;}
+ assert((missing+added)/total<.02,`reference ${ref}: small two-sided fitting error`);
+ assert(Math.abs(added-missing)/total<.005,`reference ${ref}: no systematic expansion or contraction`);
+ console.log(`Reference ${ref}: two-sided error ${(100*(missing+added)/total).toFixed(2)}%, net area bias ${(100*(added-missing)/total).toFixed(2)}%.`);
 }

@@ -99,3 +99,11 @@ Run `node tests/material-evidence.cjs` for fixture-free void/exterior checks, an
 ### Bidirectional material fitting (v30)
 
 Scaffold holes are discarded before image-supported exclusions are applied. A detail-dependent simplified source silhouette also supplies a minimum material envelope, recovering supported tips and filling unsupported mesh gaps. The upper envelope still limits protrusions; accepted image cavities are subtracted last. This refines final material boundaries without changing the shared polygon definitions.
+
+### Balanced boundary fitting (v32)
+
+The approved comparison prototype now supplies crystal cut boundaries. Ordered contour runs are simplified and robustly fitted with perpendicular-distance line regression; bounded corner movement protects tips and notches, and crossing refits fall back to the original ring. Detail sets the fitting tolerance (1.5 px at 768px / 100%). Both outer and accepted void boundaries use this fit. The union-based outer envelope is removed to avoid outward bias. With symmetry, the existing structure-aligned trace supplies the contour before exact final symmetry. Shared internal polygon definitions remain unchanged and their guides are clipped to fitted material.
+
+Automatic void classification is unchanged. Per-void Auto / Structural / False overrides remain a proposed follow-up; no manual override UI is included in v32.
+
+Tests now assess added and omitted material together and net area bias, alongside supported voids, tip/notch retention, fill and hanger behavior.
