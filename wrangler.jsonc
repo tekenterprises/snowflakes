@@ -2,6 +2,8 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "snow-wizard",
   "account_id": "d6efd5ef2511200c3d09dffdfac53e04",
+  "workers_dev": true,
+  "preview_urls": false,
   "compatibility_date": "2026-11-11",
   "assets": {
     "directory": "./dist"
