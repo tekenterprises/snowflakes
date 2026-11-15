@@ -47,3 +47,17 @@ this command. No permission to modify unrelated Cloudflare resources is implied.
 
 Official configuration reference:
 https://developers.cloudflare.com/workers/static-assets/binding/
+
+## Verified v34 deployment — 2026-11-15
+
+- Live app: https://snow-wizard.evan-d6e.workers.dev
+- Deployed source/config commit: `3be8a85b978d9716e86902aae1a493c8e06210aa`.
+- Worker version: `0009eba2-722e-4aa0-b44a-e01d7c10e9f2`.
+- Deployment: `58741820-051a-443c-ae6f-087cb7a65a20`, 100% traffic.
+- All53 public static files were fetched over HTTPS and matched local release
+  bytes. The workers.dev endpoint remains enabled and preview URLs disabled,
+  matching the pre-deployment settings. No browser automation was used.
+
+The deployment initially appeared blocked only because the unrelated generic
+token was checked. The project token established in “Review Cloudflare access
+needs” was present and valid; no replacement token was required.

@@ -129,6 +129,11 @@ editor and laser-cut SVG exporter. These instructions apply to this workspace.
 - Keep local edits, commits, GitHub publication, and live deployment distinct.
   Respect the user's authorized release stage; do not infer deployment permission
   from a review, plan, or request for comparisons. Honor authorization already given.
+- For Cloudflare deployment, read `docs/DEPLOYMENT.md`. The existing Worker
+  is `snow-wizard`; the saved project credential is the Windows User environment
+  variable `SNOW_WIZARD_CLOUDFLARE_API_TOKEN`. Check project setup and relevant
+  project chats before asking the user to recreate credentials. The generic
+  inherited Cloudflare token is a different credential.
 - Before a Sites release, follow the current Sites skill, verify the existing
   project identity, and preserve owner-private access. Never create a duplicate
   Site or alter unrelated Cloudflare resources. Confirm deployment success before
