@@ -13,3 +13,13 @@ const star=Array.from({length:5},(_,i)=>[Math.cos(i*4*Math.PI/5),Math.sin(i*4*Ma
 assert(!M.valid({faces:[{ids:[0,1,2,3,4]}]},star),'positive adjacent turns must not admit a self-intersecting pentagram');
 const collapsed=[[0,0],[2,0],[2,0],[2,2],[0,2]];
 assert(!M.valid({faces:[{ids:[0,1,2,3,4]}]},collapsed),'collapsed edges cannot hide intersecting cells');
+
+// The long-lived fitting worker keeps a measured model across slider changes.
+// Evicting an old detail must release its mesh and rebuild identical geometry.
+for(const detail of [0,10,20,30,40,50])M.fit(model,detail,0,hub,hub);
+const rebuilt=M.fit(model,100,0,hub,hub);
+assert.notEqual(rebuilt.template,zero.template,'six retained details evict the old mesh');
+assert.deepEqual(rebuilt.vertices,zero.vertices,'detail eviction preserves fitted coordinates');
+assert.deepEqual(rebuilt.cutPolygons,zero.cutPolygons,'detail eviction preserves shared cut subdivisions');
+assert.deepEqual(rebuilt.pieces.map(p=>[p.pieceSlotId,p.vertexIds]),zero.pieces.map(p=>[p.pieceSlotId,p.vertexIds]),'detail eviction preserves topology');
+console.log('Shared mesh detail cache: bounded retention and identical rebuilt geometry.');

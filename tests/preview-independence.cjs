@@ -5,7 +5,7 @@ function node(){return {listeners:{},value:0,checked:false,style:{},classList:{t
 function get(id){if(!elements.has(id))elements.set(id,node());return elements.get(id)}
 const pixels=new Uint8Array(768*768*4).fill(255),ctx={fillRect(){},save(){},translate(){},rotate(){},drawImage(){},restore(){},getImageData(){return {data:pixels}}},model={},fitted={axis:29.95,branchCount:6,polygons:[[[0,0],[2,0],[0,2]]],match:1,hub:{observed:false},inferredBranchCount:0};
 const context=vm.createContext({ReferenceLibrary:require('../dist/references.js'),console,setTimeout,clearTimeout,Image:class{},document:{getElementById:get,createElement(tag){return tag==='canvas'?{...node(),getContext(){return ctx},toDataURL(){return ''}}:node()},querySelector:()=>node(),querySelectorAll:()=>[]},Flake:{path(){return ''}},BranchStructure:{extract(){return model}},ImageCrystal:{fit(){return fitted}},Preview:{fitBounds(){return [0,0,768,768]}},CutOutput:{process(mask,n,o,f){calls.push(f);options.push(o);return {loops:[[[0,0],[1,0],[0,1]]],components:1,removed:0,branches:[[[0,0],[1,1]]]}}}});
-vm.runInContext(fs.readFileSync('dist/app.js','utf8'),context);
+for(const file of ['geometry-pipeline','geometry-client','app'])vm.runInContext(fs.readFileSync('dist/'+file+'.js','utf8'),context);
 get('symmetry').value=100;get('crystal').checked=false;get('fill').checked=get('islands').checked=true;
 vm.runInContext('crop={width:256,height:320};render()',context);
 const ids=['cut','structure','overlay','crystal-layer'],names=['vector','branches','image','crystal'];
@@ -33,3 +33,4 @@ get('hanger').checked=true;vm.runInContext('crop=null',context);get('reset').onc
 console.log('Hanger controls, millimeter defaults, gap width and reset are wired to cut options.');
 
 get('symmetry').value=0;get('crystal').checked=false;get('hanger').checked=true;vm.runInContext("crop={width:256,height:320};render()",context);assert.strictEqual(calls.at(-1),fitted,'hanger must request the axis model even with geometry and guides off');assert(!get('status').textContent.startsWith('Could not trace'),'render should not catch an unexpected exception');
+const beforeVisibility=calls.length;get('overlay').onclick();get('cut').onclick();get('cut').onclick();get('overlay').onclick();assert.equal(calls.length,beforeVisibility,'image/vector visibility only repaints the existing geometry');

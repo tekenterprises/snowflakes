@@ -33,8 +33,12 @@ Windows Git cloning succeeded with the Windows certificate store:
 Keep TLS verification enabled. Credentials, installed dependencies, fixture
 binaries, and generated diagnostic renders do not belong in commits.
 
-Local work, commits, GitHub publication, and Sites deployment are distinct steps.
-The existing Site from the handoff is
-`appgprj_6af233a61f148191a4c8bd1c77fdf31a`, owner-private. Verify it through current
-Sites tools when deployment is authorized. Do not create another Site or change
-unrelated Cloudflare resources. This development setup does not change live state.
+Local work, commits, GitHub publication, and deployment are distinct steps.
+The current webapp is the existing Cloudflare Worker `snow-wizard`; see
+[deployment](DEPLOYMENT.md) for its verified identity and project-scoped credential
+lookup. The handoff's owner-private Site
+`appgprj_6af233a61f148191a4c8bd1c77fdf31a` is historical and separate. Do not
+create a duplicate Site or change unrelated Cloudflare resources.
+
+The application uses a browser-local Web Worker with a synchronous compatibility
+fallback; see [processing](processing.md) for stage caching and verification.

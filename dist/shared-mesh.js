@@ -6,7 +6,7 @@ const S=typeof module!=='undefined'?require('./structural-model.js'):root.Struct
 const PF=typeof module!=='undefined'?require('./polygon-fit.js'):root.PolygonFit;
 const Surface=typeof module!=='undefined'?require('./silhouette-mesh.js'):root.SilhouetteMesh;
 const Earcut=typeof module!=='undefined'?require('./vendor/earcut.min.js'):root.earcut;
-const cache=new WeakMap(),clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const cache=new WeakMap(),edgeCache=new WeakMap(),clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
 const signed=p=>p.reduce((v,a,i)=>{const b=p[(i+1)%p.length];return v+a[0]*b[1]-a[1]*b[0]},0)/2;
 const mean=a=>{const s=a.slice().sort((a,b)=>a-b),k=Math.floor(a.length*.15),v=s.slice(k,s.length-k);return v.reduce((s,x)=>s+x,0)/v.length};
@@ -28,7 +28,7 @@ function primitives(t,values,detail,scale){const result=[],count=R.STEPS,base=Ma
  }
  fit(0,count,0);return result;
 }
-function build(model,detail,hub,localHub){
+function scaffold(model,detail,hub){
  const profiles=R.measure(model).profiles,ideal=S.deform(model,Math.min(100,detail),100),groups=new Map(),means=new Map();
  for(const t of model.tree){if(!groups.has(t.slotId))groups.set(t.slotId,[]);groups.get(t.slotId).push(profiles[t.id].map(v=>t.mirror?[-v[1],-v[0]]:v));}
  for(const [id,records] of groups){const values=records[0].map((_,i)=>[0,1].map(s=>mean(records.map(p=>p[i][s]))));if(model.slots[id].parent===null)for(const v of values){const w=(v[1]-v[0])/2;v[0]=-w;v[1]=w}means.set(id,values)}
@@ -58,20 +58,34 @@ function build(model,detail,hub,localHub){
  const resolved=resolveConstraints(constraints);constraints.clear();for(const [id,row] of resolved)constraints.set(id,row);
  const mesh={vertices,faces,owners,ideal,means,profiles,constraints,coreIds,detail,silhouette:!!material,initialFaceCount:faces.length,maxFaceCount:Math.floor(faces.length*1.1)};
  cutEdges(mesh);mesh.boundaries=boundaryEdges(mesh);mesh.exterior=new Set(mesh.boundaries.flat());
+ return mesh;
+}
+// Both independent fits start from the same immutable scaffold. Only the face
+// records change during refinement. Features copy the vertex/owner arrays before
+// extending them; measured profiles, coordinates and constraints stay read-only.
+function copyScaffold(mesh){return {...mesh,faces:mesh.faces.map(f=>({...f}))};}
+function fitScaffold(mesh,model,detail,localHub){
  mesh.faithful=fitImage(mesh,model,localHub);
  // A shape that needs another facet on one observed arm gets that same facet
  // definition on every half-arm, rather than independently changing its topology.
  for(let pass=0;pass<(detail>=60?2:0);pass++){if(!refine(mesh))break;mesh.faithful=fitImage(mesh,model,localHub);}
  cutEdges(mesh);mesh.boundaries=boundaryEdges(mesh);mesh.exterior=new Set(mesh.boundaries.flat());
  if(model.boundaryEvidence&&detail>=120)addBoundaryFeatures(mesh,model);
+ return mesh;
+}
+function build(model,detail,hub,localHub){
+ const source=scaffold(model,detail,hub),mesh=fitScaffold(copyScaffold(source),model,detail,localHub);
  // Full-resolution evidence is a guide, not permission to damage a previously
  // sound interpretation. Compare complete valid poses, including their topology,
  // instead of accepting every nearest-contour projection unconditionally.
- if(model.boundaryEvidence){const baseline=build({...model,boundaryEvidence:null},detail,hub,localHub),before=boundaryError(baseline,model),after=boundaryError(mesh,model);if(before.total<after.total){baseline.boundaryComparison={before,after,selected:'scaffold'};return baseline;}mesh.boundaryComparison={before,after,selected:'evidence'};}
+ if(model.boundaryEvidence){const baseline=fitScaffold(copyScaffold(source),{...model,boundaryEvidence:null},detail,localHub),before=boundaryError(baseline,model),after=boundaryError(mesh,model);if(before.total<after.total){baseline.boundaryComparison={before,after,selected:'scaffold'};return baseline;}mesh.boundaryComparison={before,after,selected:'evidence'};}
  return mesh;
 }
 function cutEdges(mesh){
- for(const f of mesh.faces)f.cutIds=f.ids.flatMap((a,k)=>{const b=f.ids[(k+1)%f.ids.length],A=mesh.vertices[a],B=mesh.vertices[b],dx=B[0]-A[0],dy=B[1]-A[1],den=dx*dx+dy*dy,along=[];for(let id=0;id<mesh.vertices.length;id++){const P=mesh.vertices[id],u=((P[0]-A[0])*dx+(P[1]-A[1])*dy)/den;if(u>=-1e-8&&u<1-1e-8&&Math.abs(cross(A,B,P))<1e-7*Math.sqrt(den))along.push({id,u})}return along.sort((a,b)=>a.u-b.u).map(v=>v.id)});
+ // Canonical coordinates never move. Reuse each exact directed subdivision
+ // across fitting/refinement passes; feature insertion uses a new vertex array.
+ let entry=edgeCache.get(mesh.vertices);if(!entry){entry={edges:new Map(),index:spatialBoxes(mesh.vertices.map(([x,y])=>[x,y,x,y]))};edgeCache.set(mesh.vertices,entry);}const {edges,index}=entry;
+ for(const f of mesh.faces)f.cutIds=f.ids.flatMap((a,k)=>{const b=f.ids[(k+1)%f.ids.length],key=a+':'+b;if(edges.has(key))return edges.get(key);const A=mesh.vertices[a],B=mesh.vertices[b],dx=B[0]-A[0],dy=B[1]-A[1],den=dx*dx+dy*dy,padding=1e-7+1e-8*Math.sqrt(den),along=[],candidates=index.query([Math.min(A[0],B[0])-padding,Math.min(A[1],B[1])-padding,Math.max(A[0],B[0])+padding,Math.max(A[1],B[1])+padding]);for(const id of [...candidates].sort((a,b)=>a-b)){const P=mesh.vertices[id],u=((P[0]-A[0])*dx+(P[1]-A[1])*dy)/den;if(u>=-1e-8&&u<1-1e-8&&Math.abs(cross(A,B,P))<1e-7*Math.sqrt(den))along.push({id,u})}const ids=along.sort((a,b)=>a.u-b.u).map(v=>v.id);edges.set(key,ids);return ids});
 }
 function boundaryEdges(mesh){const edges=new Map();for(const f of mesh.faces)for(let i=0;i<f.cutIds.length;i++){const a=f.cutIds[i],b=f.cutIds[(i+1)%f.cutIds.length];if(a===b)continue;const key=a+':'+b,reverse=b+':'+a;if(edges.has(reverse)){const edge=edges.get(reverse);if(--edge.count===0)edges.delete(reverse);}else if(edges.has(key))edges.get(key).count++;else edges.set(key,{a,b,count:1});}const outgoing=new Map();for(const [key,{a,b}] of edges){if(!outgoing.has(a))outgoing.set(a,[]);outgoing.get(a).push([key,b]);}const loops=[];while(edges.size){const start=edges.values().next().value.a,ring=[];let at=start;do{ring.push(at);const next=outgoing.get(at)?.find(([key])=>edges.has(key));if(!next)throw Error('Open shared-mesh boundary');const edge=edges.get(next[0]);if(--edge.count===0)edges.delete(next[0]);at=next[1];}while(at!==start);if(ring.length>=3)loops.push(ring);}return loops;}
 
@@ -190,6 +204,14 @@ function convex(p){return p.every((a,i)=>{const b=p[(i+1)%p.length],L=Math.hypot
 function valid(mesh,positions){const polygons=mesh.faces.map(f=>f.ids.map(i=>positions[i])),boxes=[];for(const p of polygons){if(signed(p)<1e-8||!convex(p))return false;boxes.push([Math.min(...p.map(v=>v[0])),Math.min(...p.map(v=>v[1])),Math.max(...p.map(v=>v[0])),Math.max(...p.map(v=>v[1]))]);}
  const order=boxes.map((_,i)=>i).sort((a,b)=>boxes[a][0]-boxes[b][0]);for(let i=0;i<order.length;i++){const a=order[i],A=boxes[a];for(let j=i+1;j<order.length;j++){const b=order[j],B=boxes[b];if(B[0]>=A[2]-1e-7)break;if(B[1]>=A[3]-1e-7||A[1]>=B[3]-1e-7)continue;if(overlaps(polygons[a],polygons[b]))return false;}}return true;
 }
+// Conservative spatial broad phase for repeated local moves. A face occupies
+// every grid square touched by its closed AABB; queries include changed faces
+// separately because their accepted boxes are still at their previous pose.
+function spatialBoxes(boxes){const span=Math.max(Math.max(...boxes.map(b=>b[2]))-Math.min(...boxes.map(b=>b[0])),Math.max(...boxes.map(b=>b[3]))-Math.min(...boxes.map(b=>b[1]))),size=Number.isFinite(span)?Math.max(1,span/Math.sqrt(Math.max(1,boxes.length))):1,cells=new Map(),large=new Set();
+ function keys(b){const x0=Math.floor(b[0]/size),x1=Math.floor(b[2]/size),y0=Math.floor(b[1]/size),y1=Math.floor(b[3]/size);if(![x0,x1,y0,y1].every(Number.isFinite)||(x1-x0+1)*(y1-y0+1)>4096)return null;const out=[];for(let x=x0;x<=x1;x++)for(let y=y0;y<=y1;y++)out.push(x+':'+y);return out;}
+ function add(id,b){const list=keys(b);if(!list){large.add(id);return;}for(const key of list){if(!cells.has(key))cells.set(key,new Set());cells.get(key).add(id);}}
+ boxes.forEach((b,id)=>add(id,b));return {query(b){const list=keys(b);if(!list)return new Set(boxes.map((_,id)=>id));const ids=new Set(large);for(const key of list)for(const id of cells.get(key)||[])ids.add(id);return ids;},update(id,b,next){const list=keys(b);if(list)for(const key of list){const ids=cells.get(key);ids.delete(id);if(!ids.size)cells.delete(key);}else large.delete(id);add(id,next);}};
+}
 function fitImage(mesh,model,localHub){const local=S.deform(model,Math.min(100,mesh.detail),0),goals=mesh.vertices.map((p,i)=>{const ids=[...mesh.owners[i]];if(!ids.length)return p.slice();const candidates=ids.map(id=>{const t=mesh.ideal[id],dest=local[id],v=projection(p,t),side=v.w<0?0:1,canonical=mesh.means.get(t.slotId),source=mesh.profiles[dest.localId],canonWidth=Math.abs(sample(canonical,v.u,t.mirror?1-side:side)),localWidth=Math.abs(sample(source,v.u,side)),ratio=clamp(localWidth/Math.max(.25,canonWidth),.25,4);return point(dest,v.u,v.w*ratio)});return [0,1].map(k=>mean(candidates.map(v=>v[k])))});
  if(mesh.silhouette||model.boundaryEvidence){const tangents=new Map();for(const ring of mesh.boundaries)for(let k=0;k<ring.length;k++){const a=mesh.vertices[ring[(k+ring.length-1)%ring.length]],b=mesh.vertices[ring[(k+1)%ring.length]];tangents.set(ring[k],[b[0]-a[0],b[1]-a[1]]);}for(const i of mesh.exterior){if(mesh.coreIds.includes(i))continue;const arm=Math.max(0,mesh.faces.find(f=>f.ids.includes(i)&&f.arm!==undefined)?.arm||0);goals[i]=mesh.boundaryGoals?.get(i)||Surface.project(model,mesh.vertices[i],arm,tangents.get(i));}}
  if(localHub)mesh.coreIds.forEach((id,k)=>goals[id]=localHub.polygon[k].slice());
@@ -197,26 +219,36 @@ function fitImage(mesh,model,localHub){const local=S.deform(model,Math.min(100,m
  // Core and seam vertices are shared; one feasible mesh is fitted for all arms.
  // Start conservatively, then let each free vertex improve its image fit without
  // flipping a face, breaking a shared edge, or crossing another cell.
- let positions=(mesh.faithful||mesh.vertices).map(p=>p.slice());
- for(const alpha of [1,.5,.25,.125,.0625,0]){const trial=conform(mesh,positions.map((p,i)=>p.map((v,k)=>v+alpha*(goals[i][k]-v))));if(valid(mesh,trial)){positions=trial;break}}
+ let positions=(mesh.faithful||mesh.vertices).map(p=>p.slice()),conformed=false;
+ for(const alpha of [1,.5,.25,.125,.0625,0]){const trial=conform(mesh,positions.map((p,i)=>p.map((v,k)=>v+alpha*(goals[i][k]-v))));if(valid(mesh,trial)){positions=trial;conformed=true;break}}
+ // Every trial changes free vertices and their directly solved dependents only.
+ // Keep the accepted arrays in place, then roll back trial references. This
+ // preserves the original coordinate arithmetic without copying/conforming the
+ // unrelated vertices on every local candidate.
+ const polygons=mesh.faces.map(f=>f.ids.map(i=>positions[i])),box=p=>[Math.min(...p.map(v=>v[0])),Math.min(...p.map(v=>v[1])),Math.max(...p.map(v=>v[0])),Math.max(...p.map(v=>v[1]))],boxes=polygons.map(box),incident=mesh.vertices.map(()=>[]),dependents=mesh.vertices.map(()=>[]);
+ mesh.faces.forEach((f,i)=>f.ids.forEach(id=>incident[id].push(i)));for(const [id,e] of mesh.constraints)for(const [free] of e.weights)dependents[free].push(id);
+ function affected(ids){const vertices=[...new Set(ids.flatMap(id=>[id,...dependents[id]]))];return {ids,vertices,faces:[...new Set(vertices.flatMap(id=>incident[id]))]};}
+ const influence=mesh.vertices.map((_,i)=>affected([i])),index=spatialBoxes(boxes);
+ function moveValid(affected){const changed=new Map(affected.map(id=>[id,mesh.faces[id].ids.map(i=>positions[i])])),nextBoxes=new Map([...changed].map(([id,p])=>[id,box(p)])),changedIds=[...changed.keys()],changedIndex=changed.size>16?spatialBoxes([...nextBoxes.values()]):null;for(const [id,p] of changed){if(signed(p)<1e-8||!convex(p))return null;const A=nextBoxes.get(id),candidates=index.query(A);if(changedIndex){for(const j of changedIndex.query(A))candidates.add(changedIds[j]);}else for(const j of changedIds)candidates.add(j);for(const j of [...candidates].sort((a,b)=>a-b)){if(j===id)continue;const q=changed.get(j)||polygons[j],B=nextBoxes.get(j)||boxes[j];if(A[0]>=B[2]-1e-7||B[0]>=A[2]-1e-7||A[1]>=B[3]-1e-7||B[1]>=A[3]-1e-7)continue;if(overlaps(p,q))return null;}}return {changed,nextBoxes};}
+ let stateValid=conformed&&valid(mesh,positions);
+ function trial(move,targets){if(!conformed)move={...move,vertices:[...new Set([...move.vertices,...mesh.constraints.keys()])],faces:mesh.faces.map((_,id)=>id)};const saved=move.vertices.map(id=>[id,positions[id]]);move.ids.forEach((id,k)=>positions[id]=targets[k]);for(const id of move.vertices){const e=mesh.constraints.get(id);if(e)positions[id]=[0,1].map(k=>e.weights.reduce((s,[free,w])=>s+positions[free][k]*w,0));}const checked=stateValid?moveValid(move.faces):valid(mesh,positions)?{changed:new Map(move.faces.map(id=>[id,mesh.faces[id].ids.map(i=>positions[i])]))}:null;let result=null;if(checked)result={...checked,pose:move.vertices.map(id=>[id,positions[id]])};for(const [id,p] of saved)positions[id]=p;return result;}
+ function commit(result){for(const [id,p] of result.pose)positions[id]=p;for(const [id,p] of result.changed){polygons[id]=p;const bounds=result.nextBoxes?.get(id)||box(p);index.update(id,boxes[id],bounds);boxes[id]=bounds;}stateValid=conformed=true;}
+ const toward=(ids,alpha)=>ids.map(i=>positions[i].map((v,k)=>v+alpha*(goals[i][k]-v)));
  // Move connected groups together before individual vertices. A whole branch
  // can translate/rotate even when moving one corner first would flip a thin face.
  const blocks=[];for(let arm=0;arm<6;arm++)blocks.push([...new Set(mesh.faces.filter(f=>f.arm===arm).flatMap(f=>f.ids))]);for(const t of mesh.ideal){const children=new Set([t.id]);for(const child of mesh.ideal)if(children.has(child.parent))children.add(child.id);blocks.push([...new Set(mesh.faces.filter(f=>children.has(f.branchId)).flatMap(f=>f.ids))]);}
- for(let pass=0;pass<2;pass++)for(const block of blocks)for(const alpha of [1,.5,.25]){const trial=positions.map(p=>p.slice());for(const i of block)if(!mesh.constraints.has(i))trial[i]=positions[i].map((v,k)=>v+alpha*(goals[i][k]-v));conform(mesh,trial);if(valid(mesh,trial)){positions=trial;break}}
- const polygons=mesh.faces.map(f=>f.ids.map(i=>positions[i])),box=p=>[Math.min(...p.map(v=>v[0])),Math.min(...p.map(v=>v[1])),Math.max(...p.map(v=>v[0])),Math.max(...p.map(v=>v[1]))],boxes=polygons.map(box),incident=mesh.vertices.map(()=>[]),dependents=mesh.vertices.map(()=>[]);
- mesh.faces.forEach((f,i)=>f.ids.forEach(id=>incident[id].push(i)));for(const [id,e] of mesh.constraints)for(const [free] of e.weights)dependents[free].push(id);
- const influence=mesh.vertices.map((_,i)=>{const ids=new Set();function visit(k){if(ids.has(k))return;ids.add(k);dependents[k].forEach(visit)}visit(i);return [...new Set([...ids].flatMap(id=>incident[id]))]});
- function moveValid(trial,affected){const changed=new Map(affected.map(id=>[id,mesh.faces[id].ids.map(i=>trial[i])]));for(const [id,p] of changed){if(signed(p)<1e-8||!convex(p))return null;const A=box(p);for(let j=0;j<polygons.length;j++){if(j===id)continue;const q=changed.get(j)||polygons[j],B=changed.has(j)?box(q):boxes[j];if(A[0]>=B[2]-1e-7||B[0]>=A[2]-1e-7||A[1]>=B[3]-1e-7||B[1]>=A[3]-1e-7)continue;if(overlaps(p,q))return null;}}return changed;}
- function fitFaces(){for(const face of mesh.faces){const ids=face.ids.filter(i=>!mesh.constraints.has(i));if(!ids.some(i=>Math.hypot(...positions[i].map((v,k)=>v-goals[i][k]))>.1))continue;const affected=[...new Set(ids.flatMap(i=>influence[i]))];for(const alpha of [1,.5,.25]){const trial=positions.map(p=>p.slice());for(const i of ids)trial[i]=positions[i].map((v,k)=>v+alpha*(goals[i][k]-v));conform(mesh,trial);const changed=moveValid(trial,affected);if(changed){positions=trial;for(const [id,p] of changed){polygons[id]=p;boxes[id]=box(p)}break}}}}
+ const moves=blocks.map(block=>affected(block.filter(i=>!mesh.constraints.has(i))));
+ for(let pass=0;pass<2;pass++)for(const move of moves)for(const alpha of [1,.5,.25]){const result=trial(move,toward(move.ids,alpha));if(result){commit(result);break;}}
+ function fitFaces(){for(const face of mesh.faces){const ids=face.ids.filter(i=>!mesh.constraints.has(i));if(!ids.some(i=>Math.hypot(...positions[i].map((v,k)=>v-goals[i][k]))>.1))continue;const move=affected(ids);for(const alpha of [1,.5,.25]){const result=trial(move,toward(ids,alpha));if(result){commit(result);break;}}}}
  fitFaces();
  for(let pass=0;pass<4;pass++)for(let i=0;i<positions.length;i++){if(mesh.constraints.has(i)||Math.hypot(...positions[i].map((v,k)=>v-goals[i][k]))<.1)continue;let best=null;const delta=goals[i].map((v,k)=>v-positions[i][k]),distance=delta[0]**2+delta[1]**2;
-  for(const direction of [delta,[delta[0],0],[0,delta[1]]])for(const alpha of [1,.5,.25]){const target=positions[i].map((v,k)=>v+alpha*direction[k]),gain=distance-target.reduce((s,v,k)=>s+(v-goals[i][k])**2,0);if(gain<.001||best&&gain<=best.gain)continue;const trial=positions.map(p=>p.slice());trial[i]=target;conform(mesh,trial);const changed=moveValid(trial,influence[i]);if(changed)best={trial,changed,gain};}
-  if(best){positions=best.trial;for(const [id,p] of best.changed){polygons[id]=p;boxes[id]=box(p)}}
+  for(const direction of [delta,[delta[0],0],[0,delta[1]]])for(const alpha of [1,.5,.25]){const target=positions[i].map((v,k)=>v+alpha*direction[k]),gain=distance-target.reduce((s,v,k)=>s+(v-goals[i][k])**2,0);if(gain<.001||best&&gain<=best.gain)continue;const result=trial(influence[i],[target]);if(result)best={...result,gain};}
+  if(best)commit(best);
  }
 
  fitFaces();return positions;
 }
-function fit(model,detail,symmetry,hub,localHub){let details=cache.get(model);if(!details){details=new Map();cache.set(model,details)}let mesh=details.get(detail);if(!mesh){mesh=build(model,clamp(detail,0,100)*2,hub,localHub);details.set(detail,mesh)}const z=1-symmetry/100;let vertices=z===1?mesh.faithful.map(p=>p.slice()):z===0?mesh.vertices.map(p=>p.slice()):mesh.vertices.map((p,i)=>p.map((v,k)=>v+z*(mesh.faithful[i][k]-v)));
+function fit(model,detail,symmetry,hub,localHub){let details=cache.get(model);if(!details){details=new Map();cache.set(model,details)}let mesh=details.get(detail);if(mesh){details.delete(detail);details.set(detail,mesh)}else{mesh=build(model,clamp(detail,0,100)*2,hub,localHub);details.set(detail,mesh);if(details.size>6)details.delete(details.keys().next().value)}const z=1-symmetry/100;let vertices=z===1?mesh.faithful.map(p=>p.slice()):z===0?mesh.vertices.map(p=>p.slice()):mesh.vertices.map((p,i)=>p.map((v,k)=>v+z*(mesh.faithful[i][k]-v)));
  if(!valid(mesh,vertices)){let alpha=z;do{alpha*=.5;vertices=mesh.vertices.map((p,i)=>p.map((v,k)=>v+alpha*(mesh.faithful[i][k]-v)))}while(alpha>1e-5&&!valid(mesh,vertices));if(!valid(mesh,vertices))vertices=mesh.vertices;}
  const pieces=mesh.faces.map(f=>{const polygon=f.ids.map(i=>vertices[i]),center=[0,1].map(k=>mean(polygon.map(p=>p[k])));return {...f,vertexIds:f.ids,polygon,start:center,end:center,u0:0,u1:1,error:0}});
  return {pieces,loops:mesh.boundaries.map(ids=>ids.map(i=>vertices[i])),cutPolygons:mesh.faces.map(f=>f.cutIds.map(i=>vertices[i])),vertices,template:mesh};

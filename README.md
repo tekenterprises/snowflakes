@@ -126,3 +126,16 @@ cell geometry. Offset, rounding, gap closing, and hanger remain later cut operat
 See [material geometry](docs/material-mesh.md) for the contracts and verification
 commands, and [setup](docs/SETUP.md) for the local environment. See [deployment](docs/DEPLOYMENT.md) for the Cloudflare target and release checks.
 A source version does not establish live deployment status.
+
+### Source-supported branch patches and background processing (v35)
+
+Broad off-image regions now trigger repartitioning of the supported material
+using the existing branch groups as guides. Open bays are no longer forced into
+a closed scaffold. The central hexagon stays intact, cells remain convex with
+3–6 sides, and full symmetry repeats one canonical subdivision. This is a generic
+image/geometry test, independent of reference identity.
+
+Geometry runs in a persistent browser-local worker. Repeated controls reuse
+analysis and fitted geometry; visibility changes reuse the preview. Sparse fitter
+trials, conservative spatial searches, and prepared hole paths reduce solver work.
+See [processing](docs/processing.md) for cache boundaries and fallback behavior.
