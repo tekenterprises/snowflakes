@@ -61,3 +61,16 @@ https://developers.cloudflare.com/workers/static-assets/binding/
 The deployment initially appeared blocked only because the unrelated generic
 token was checked. The project token established in “Review Cloudflare access
 needs” was present and valid; no replacement token was required.
+
+## Verified v35 deployment — 2026-11-15
+
+- Live app: https://snow-wizard.evan-d6e.workers.dev
+- Deployed source commit: `6fa1adba421ddd8b0a996b153b11c3c280fe1689`.
+- Worker version: `0fdeb893-a926-45ee-8c00-975bf9721371`.
+- Deployment: `67a1d85f-66e9-4632-b825-2cab4869060a`, 100% traffic.
+- All 56 public static files matched local release bytes over HTTPS, including
+  the new background worker, client, and pipeline scripts. GitHub's main branch
+  was verified at the source commit before deployment.
+- The workers.dev endpoint remains enabled and preview URLs disabled. Browser
+  automation was not used; build, regression, deployment API, and HTTP checks are
+  recorded separately in [v35 validation](VALIDATION-v35.md).
