@@ -10,3 +10,9 @@ for(const symmetry of [0,100]){
  const hanger=O.process(e.raw,n,{...options,fill:true,hanger:true,holeDiameter:3,holeRim:1.5,holeNeck:1},fitted);assert.equal(hanger.loops.length,2,'intentional hanger survives filling');
  console.log(`Reference 19 symmetry ${symmetry}: ${(100*preserved/observed).toFixed(1)}% supported void area retained; fill and hanger pass.`);
 }
+for(const ref of [18,19]){
+ const pixels=new Uint8Array(fs.readFileSync(`/tmp/image-model-${ref}.rgba`)),e=E.analyze(pixels,n,false,230),fitted=I.fit(pixels,n,100,false,100,0,null,230),out=O.process(e.raw,n,{crystal:100,detail:100,symmetry:0,offset:0,round:0,gaps:0,size:100,islands:true,fill:false},fitted);
+ let total=0,missing=0;for(let i=0;i<e.raw.length;i++)if(e.raw[i]){total++;missing+=!out.mask[i];}
+ assert(missing/total<.005,`reference ${ref}: retain observed tips and material, not only voids`);
+ console.log(`Reference ${ref}: ${(100*(1-missing/total)).toFixed(2)}% photographed material retained.`);
+}

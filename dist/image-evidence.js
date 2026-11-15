@@ -24,7 +24,12 @@ function operation(a,b,type){if(!a.length)return [];const clip=new Clipper.Clipp
 function union(p){return operation(p,[],Clipper.ClipType.ctUnion);}
 function constrain(loops,evidence,detail,symmetry,axis=0){const {n,outside}=evidence,c=n/2,z=symmetry/100,allowance=(1.25+3.75*(1-detail/100)**2)*n/384,allowed=new Uint8Array(n*n);
  for(let y=0;y<n;y++)for(let x=0;x<n;x++){const i=y*n+x;let d=outside[i];if(z){const dx=x+.5-c,dy=y+.5-c,values=rotations.map(([co,si])=>sample(outside,n,c+dx*co-dy*si-.5,c+dx*si+dy*co-.5)).sort((a,b)=>a-b);d=(1-z)*d+z*values[1];}allowed[i]=d<=allowance?1:0;}
- const envelope=F.contours(allowed,n,.35*n/384),bounded=operation(loops,envelope,Clipper.ClipType.ctIntersection);let holes=evidence.holes;
+ // Scaffold seams are not evidence of holes. Start with its exterior material,
+ // then restore image-supported tips before applying the upper boundary limit.
+ const solid=union(loops.filter(p=>C.area(p)>0)),tolerance=(.45+4*(1-detail/100)**2)*n/384;
+ const source=z?F.averageArms(evidence.filled,n,z):evidence.filled;
+ const required=F.contours(source,n,tolerance).filter(p=>C.area(p)>0);
+ const envelope=F.contours(allowed,n,.35*n/384),bounded=operation(union([...solid,...required]),envelope,Clipper.ClipType.ctIntersection);let holes=evidence.holes;
  if(z===1)holes=evidence.consensus;else if(z){const signed=a=>{const out=F.distance(a,n),inside=F.distance(Uint8Array.from(a,v=>1-v),n);return Float32Array.from(out,(v,i)=>v-inside[i]);},a=signed(holes),b=signed(evidence.consensus);holes=Uint8Array.from(a,(v,i)=>(1-z)*v+z*b[i]<=0?1:0);}
  let exclusions=F.contours(holes,n,(.4+.6*(1-detail/100))*n/384);
  // Preserve both observed sides before the final canonical half-arm replication.

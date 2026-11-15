@@ -7,3 +7,13 @@ for(let k=0;k<6;k++)assert(at(evidence.consensus,c+35*Math.cos(k*Math.PI/3),c+35
 const broad=[[[c-85,c-85],[c+85,c-85],[c+85,c+85],[c-85,c+85]]],r=E.constrain(broad,evidence,100,0),open=C.raster(r.open,n),filled=C.raster(r.filled,n);for(const [x,y] of holes){assert(!at(open,x,y));assert(at(filled,x,y));}assert(!at(filled,c+80,c),'reject a clear invented protrusion');for(let i=0;i<filled.length;i++)if(filled[i])assert(evidence.outside[i]<=r.allowance+1,'bounded image departure');
 const symmetric=E.constrain(broad,evidence,100,100),sym=C.raster(symmetric.open,n);for(let k=0;k<6;k++)assert(!at(sym,c+35*Math.cos(k*Math.PI/3),c+35*Math.sin(k*Math.PI/3)),'full symmetry cannot erase a recurring void');
 console.log('Material evidence: recurring/large voids retained, weak/tiny gaps repairable, fill switch explicit, unsupported extensions bounded.');
+// An artificial scaffold hole must not become a cut when the photograph is solid.
+const fakeHole=[[c+18,c-4],[c+18,c+4],[c+26,c+4],[c+26,c-4]];
+const repaired=E.constrain([...broad,fakeHole],evidence,100,0);
+assert(at(C.raster(repaired.open,n),c+22,c),'unsupported scaffold void must be repaired');
+// A truncated scaffold must recover the observed end of the material.
+const short=[[[c-30,c-30],[c+30,c-30],[c+30,c+30],[c-30,c+30]]];
+const recovered=C.raster(E.constrain(short,evidence,100,0).open,n);
+assert(at(recovered,c+67,c),'observed tip is recovered beyond the scaffold');
+assert(!at(recovered,c+80,c),'recovery cannot invent an exterior extension');
+console.log('Unsupported scaffold holes repaired and truncated observed material recovered.');
