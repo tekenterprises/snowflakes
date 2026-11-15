@@ -107,3 +107,9 @@ The approved comparison prototype now supplies crystal cut boundaries. Ordered c
 Automatic void classification is unchanged. Per-void Auto / Structural / False overrides remain a proposed follow-up; no manual override UI is included in v32.
 
 Tests now assess added and omitted material together and net area bias, alongside supported voids, tip/notch retention, fill and hanger behavior.
+
+### Majority-supported structural voids (v33)
+
+Fill interior holes now fills unconfirmed cavities while retaining structural ones. Classification runs on the initial non-crystal mask, independently of visible layers and cut geometry. Matching uses centroid position, area ratio and sampled shape overlap: four of six matching arms, or seven distinct arm-side observations across at least four arms. A central cavity can qualify through its own strong sixfold shape agreement. Local mode retains observed holes only; symmetry blends toward supported repeated families. The same classified mask is used for non-crystal cuts, crystal cuts and guides. Offset, rounding and close-gap operations still apply after selective filling; the intentional hanger remains last.
+
+This is a geometric confidence rule, not proof that a cavity is physically real. Repeated processing artifacts can still qualify. Manual void overrides are not included.

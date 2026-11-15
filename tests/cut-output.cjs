@@ -11,13 +11,14 @@ for(const fill of [false,true])for(const islands of [false,true]){
 assert.deepEqual(O.clean([],true,true).loops,[]);
 for(const adjusted of [false,true]){const o={...defaults,offset:adjusted?.3:0,round:adjusted?.2:0};const r=O.process(fitted.mask,64,o,fitted);assert.equal(r.loops.length,1)}
 let reproduced=0;
-for(let i=1;i<=10;i++){
- const pixels=new Uint8Array(fs.readFileSync(`/tmp/image-model-${i}.rgba`)),model=B.extract(pixels,768);
+const chosen=process.argv.find(a=>a.startsWith('--refs='));
+for(const i of chosen?chosen.slice(7).split(',').map(Number):Array.from({length:10},(_,i)=>i+1)){
+ const pixels=new Uint8Array(fs.readFileSync(`/tmp/image-model-${i}.rgba`)),model=B.extract(pixels,768),raw=Uint8Array.from({length:768*768},(_,j)=>.2126*pixels[4*j]+.7152*pixels[4*j+1]+.0722*pixels[4*j+2]<230?1:0);
  for(const symmetry of [0,100])for(const strength of [50,100]){
   const fitted=I.fit(pixels,768,strength,false,100,symmetry,model);
   reproduced+=fitted.loops.filter(p=>C.area(p)<0).length;
-  for(const adjusted of [false,true]){const o={...defaults,crystal:strength,symmetry,offset:adjusted?.2:0,round:adjusted?.1:0},r=O.process(fitted.mask,768,o,fitted);assert.equal(r.loops.length,1,`reference ${i}, symmetry ${symmetry}, strength ${strength}, adjusted ${adjusted}: fill must leave exactly one exterior`);assert(C.area(r.loops[0])>0);assert.equal(r.components,1)}
+  for(const adjusted of [false,true]){const o={...defaults,crystal:strength,symmetry,offset:adjusted?.2:0,round:adjusted?.1:0},r=O.process(raw,768,o,fitted);assert.equal(r.loops.filter(p=>C.area(p)>0).length,1,`reference ${i}: exactly one exterior`);if(!r.structuralVoids)assert.equal(r.loops.length,1,`reference ${i}: unconfirmed holes filled`);else if(!adjusted)assert(r.loops.length>1,`reference ${i}: structural voids retained`);assert.equal(r.components,1)}
  }
- console.log(`Reference ${i}: no interior cut paths with fill enabled, at partial/full geometry, faithful/symmetric and adjusted settings.`);
+ console.log(`Reference ${i}: selective fill preserves structural voids and removes unconfirmed cuts, at partial/full geometry, faithful/symmetric and adjusted settings.`);
 }
-assert(reproduced>0,'fixtures must reproduce raw polygon holes');console.log(`Reproduced ${reproduced} raw hole paths; all removed by final cut settings. Tiny subpixel holes, nested islands, fill-off and largest-piece controls also passed.`);
+assert(reproduced>0,'fixtures must reproduce raw polygon holes');console.log(`Reproduced ${reproduced} raw hole paths; unconfirmed holes removed by final cut settings. Tiny subpixel holes, nested islands, fill-off and largest-piece controls also passed.`);

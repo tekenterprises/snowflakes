@@ -26,7 +26,7 @@ function render(){
   result.previewPolygons=fitted?.polygons||[];
   $('crystal-stats').textContent=!fitted?(needModel?'No supported branch structure detected.':'Geometry is off.'):`${fitted.branchCount} branches`+(o.crystal?`${fitted.inferredBranchCount?` · ${fitted.inferredBranchCount} inferred`:""} · ${fitted.polygons.length} pieces (3–6 sides) · ${(fitted.match*100).toFixed(1)}% mask overlap · core ${fitted.hub.observed?'image-fitted':'inferred'}`:' · geometry is off');
   previewBounds=Preview.fitBounds(imageMask,N,result.loops);paint();
-  $('pathcount').textContent=result.loops.length+' closed '+(result.loops.length===1?'boundary':'boundaries');
+  $('pathcount').textContent=result.loops.length+' closed '+(result.loops.length===1?'boundary':'boundaries')+(result.structuralVoids?' · '+result.structuralVoids+' structural voids':'');
   $('vertices').textContent=result.loops.reduce((s,p)=>s+p.length,0).toLocaleString()+' vertices';$('export').disabled=!result.loops.length;
   $('status').textContent=!result.loops.length?'No shape detected. Adjust the threshold.':result.clipped?'Touches the artboard edge. Reduce source scale.':result.components>1?`${result.components} disconnected pieces.`:result.removed?`${result.removed} detached fragments removed.`:'';
   $('status').hidden=!$('status').textContent;

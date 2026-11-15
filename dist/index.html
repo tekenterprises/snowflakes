@@ -2,11 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Snowflake Studio — Crystal to cut</title><link rel="stylesheet" href="style.css?v=32">
+<title>Snowflake Studio — Crystal to cut</title><link rel="stylesheet" href="style.css?v=33">
 </head>
 <body>
 <header>
- <a class="brand" href="./"><span class="mark" aria-hidden="true">❄</span><span>Snowflake <b>Studio</b></span><small class="version" aria-label="Version 32">v32</small></a>
+ <a class="brand" href="./"><span class="mark" aria-hidden="true">❄</span><span>Snowflake <b>Studio</b></span><small class="version" aria-label="Version 33">v33</small></a>
  <button id="reset" class="quiet" title="Reset adjustments">Reset ↺</button>
 </header>
 <main class="editor">
@@ -22,7 +22,7 @@
    <div class="control"><label for="round">Curve radius <output id="roundVal"></output></label><input id="round" type="range" min="0" max="2" step="0.1" value="0"></div>
   <div class="control"><label for="gaps">Close gaps <output id="gapsVal"></output></label><input id="gaps" type="range" min="0" max="5" step="0.1" value="0" title="Closes openings up to this width, in millimeters"></div>
   <div class="toggle-grid">
-   <label class="toggle" for="fill"><input id="fill" type="checkbox" checked>Fill interior holes</label>
+   <label class="toggle" for="fill"><input id="fill" type="checkbox" checked title="Fill unconfirmed holes; retain voids supported across a majority of arms">Fill interior holes</label>
    <label class="toggle" for="islands"><input id="islands" type="checkbox" checked>Largest piece only</label>
   </div>
   <label class="toggle" for="hanger"><input id="hanger" type="checkbox">Hanger hole</label>
@@ -46,6 +46,7 @@
   <details><summary>Details & help</summary>
    <p id="crystal-stats" role="status"></p>
    <p>Corresponding arms share branch and polygon definitions. Crystal detail at 50% matches the previous maximum; 50–100% adds finer image-supported features. Detail controls smaller features; symmetry adjusts their shape. Crystal geometry adds an image-fitted central hexagon; faint cores are inferred. Cut boundaries fit straight lines through noisy image edges; polygon guides retain the shared internal layout.</p>
+   <p>Fill interior holes preserves structural voids supported across a majority of arms or arm sides. Other holes are filled. Uncheck it to keep the unfilled trace.</p>
    <p>Close gaps bridges narrow openings. The hanger adds an external rimmed loop above the flake, joined by a short neck. Neck length measures from the tip to the hole edge. Hole filling and gap closing preserve its opening.</p>
    <p>The four top buttons independently show layers; at least one stays visible. Crystal geo shows polygon guides. Use crystal geometry for cut chooses the exported shape. The SVG contains only closed cut boundaries, in millimeters.</p>
    <p>References 11–20: Wilson A. Bentley, Smithsonian Institution Archives. <a href="sources.html" target="_blank" rel="noopener">Photo credits</a>.</p>
@@ -55,5 +56,5 @@
   <p class="note" id="status" role="status" hidden></p>
  </div><div class="export-dock"><button id="export">Download cut SVG <span aria-hidden="true">↗</span></button></div></aside>
 </main>
-<script src="engine.js?v=32"></script><script src="preview.js?v=32"></script><script src="vendor/earcut.min.js?v=32"></script><script src="crystal.js?v=32"></script><script src="vendor/polygon-clipping.min.js?v=32"></script><script src="vendor/clipper.js?v=32"></script><script src="branch-structure.js?v=32"></script><script src="polygon-fit.js?v=32"></script><script src="branch-regions.js?v=32"></script><script src="branch-tips.js?v=32"></script><script src="structural-model.js?v=32"></script><script src="shared-polygons.js?v=32"></script><script src="crystal-core.js?v=32"></script><script src="silhouette-mesh.js?v=32"></script><script src="shared-mesh.js?v=32"></script><script src="boundary-fit.js?v=32"></script><script src="image-evidence.js?v=32"></script><script src="image-crystal.js?v=32"></script><script src="exact-symmetry.js?v=32"></script><script src="cut-features.js?v=32"></script><script src="cut-output.js?v=32"></script><script src="references.js?v=32"></script><script src="app.js?v=32"></script>
+<script src="engine.js?v=33"></script><script src="preview.js?v=33"></script><script src="vendor/earcut.min.js?v=33"></script><script src="crystal.js?v=33"></script><script src="vendor/polygon-clipping.min.js?v=33"></script><script src="vendor/clipper.js?v=33"></script><script src="branch-structure.js?v=33"></script><script src="polygon-fit.js?v=33"></script><script src="branch-regions.js?v=33"></script><script src="branch-tips.js?v=33"></script><script src="structural-model.js?v=33"></script><script src="shared-polygons.js?v=33"></script><script src="crystal-core.js?v=33"></script><script src="silhouette-mesh.js?v=33"></script><script src="shared-mesh.js?v=33"></script><script src="boundary-fit.js?v=33"></script><script src="image-evidence.js?v=33"></script><script src="image-crystal.js?v=33"></script><script src="exact-symmetry.js?v=33"></script><script src="cut-features.js?v=33"></script><script src="structural-voids.js?v=33"></script><script src="cut-output.js?v=33"></script><script src="references.js?v=33"></script><script src="app.js?v=33"></script>
 </body></html>
