@@ -8,6 +8,9 @@ const E=typeof module!=='undefined'?require('./exact-symmetry.js'):root.ExactSym
 const Voids=typeof module!=='undefined'?require('./structural-voids'):root.StructuralVoids;
 const Boundary=typeof module!=='undefined'?require('./boundary-fit'):root.BoundaryFit;
 const Clipper=typeof module!=='undefined'?require('./vendor/clipper.js'):root.ClipperLib;
+const Cells=typeof module!=='undefined'?require('./cavity-cells.js'):root.CavityCells;
+const CrystalVoids=typeof module!=='undefined'?require('./crystal-voids.js'):root.CrystalVoids;
+const meshCache=new WeakMap();
 function clean(loops,fill,keepLargest){
  const scale=1e6,engine=new Clipper.Clipper(),tree=new Clipper.PolyTree();
  engine.AddPaths(loops.map(p=>p.map(([x,y])=>({X:Math.round(x*scale),Y:Math.round(y*scale)}))),Clipper.PolyType.ptSubject,true);
@@ -22,6 +25,7 @@ function clean(loops,fill,keepLargest){
  return {loops:out.map(p=>p.map(v=>[v.X/scale,v.Y/scale])),components:selected.length,removed:outer.length-selected.length};
 }
 function subtract(loops,holes){if(!holes.length)return loops;const clip=new Clipper.Clipper(),out=new Clipper.Paths(),paths=ps=>ps.map(p=>p.map(([x,y])=>({X:Math.round(x*1e6),Y:Math.round(y*1e6)})));clip.AddPaths(paths(loops),Clipper.PolyType.ptSubject,true);clip.AddPaths(paths(holes),Clipper.PolyType.ptClip,true);clip.Execute(Clipper.ClipType.ctDifference,out,Clipper.PolyFillType.pftNonZero,Clipper.PolyFillType.pftNonZero);return out.map(p=>p.map(v=>[v.X/1e6,v.Y/1e6]));}
+function contains(loops,p){let inside=false;for(const ring of loops)for(let i=0,j=ring.length-1;i<ring.length;j=i++){const a=ring[i],b=ring[j];if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0])inside=!inside}return inside;}
 function process(mask,size,o,fitted=null){
  const geometry=o.crystal&&fitted;
  const structural=o.fill?Voids.analyze(mask,size,E.axis(mask,size)):null;
@@ -29,6 +33,16 @@ function process(mask,size,o,fitted=null){
  const settings={...o,fill:false,islands:o.gaps>0?false:o.islands};
  let material=fitted?.material?fitted.material(o.fill):null,geometryLoops=material||fitted?.loops;
  if(o.fill&&structural.count&&geometryLoops){const cavities=F.contours(protectedMask,size,0).map(p=>Boundary.fit(p,(1.5+7.5*(1-o.detail/100)**1.5)*size/768));geometryLoops=subtract(geometryLoops,cavities);if(material)material=geometryLoops;}
+ // The shared cells own the exterior. Selected cavities are cut into real cells,
+ // never used as an SVG clipping mask or an independent replacement silhouette.
+ let mesh=null;
+ if(fitted?.pieces&&geometryLoops&&(geometry||o.crystalPreview)){
+  const key=JSON.stringify([!!o.fill,!!o.islands,o.gaps>0,o.symmetry,size]);
+  let entries=meshCache.get(fitted);if(!entries){entries=new Map();meshCache.set(fitted,entries)}
+  mesh=entries.get(key);
+  if(!mesh){let holes=CrystalVoids.fit(geometryLoops.filter(p=>C.area(p)<0),fitted.loops,size,o.detail);if(o.symmetry===100&&holes.length)holes=E.enforce(holes.map(p=>p.slice().reverse()),size,fitted.axis*Math.PI/180).map(p=>p.slice().reverse());mesh=Cells.build(fitted.polygons,holes,fitted.pieces,fitted.cutPolygons,{symmetric:o.symmetry===100,size,axis:fitted.axis*Math.PI/180});if(o.islands&&!(o.gaps>0)){const selected=clean(mesh.loops,false,true);if(selected.removed){const keep=mesh.polygons.map(p=>contains(selected.loops,[0,1].map(k=>p.reduce((s,v)=>s+v[k],0)/p.length)));mesh.polygons=mesh.polygons.filter((_,i)=>keep[i]);mesh.pieces=mesh.pieces.filter((_,i)=>keep[i]);mesh.cutPolygons=mesh.cutPolygons.filter((_,i)=>keep[i]);mesh.loops=selected.loops;}}entries.set(key,mesh)}
+  material=geometryLoops=mesh.loops;
+ }
  let input=geometry?(material?C.raster(material,size):fitted.mask):mask,aligned=false;
  if(!geometry&&o.symmetry>0&&fitted?.alignedTrace){const trace=fitted.alignedTrace();if(trace){aligned=true;const z=o.symmetry/100;if(z===1)input=trace;else{const original=o.fill?F.fillHoles(mask,size):mask,a=F.distance(original,size),b=F.distance(Uint8Array.from(original,v=>1-v),size),c=F.distance(trace,size),d=F.distance(Uint8Array.from(trace,v=>1-v),size);input=Uint8Array.from(mask,(_,i)=>(1-z)*(a[i]-b[i])+z*(c[i]-d[i])<=0?1:0)}}}
  if(o.fill){input=F.fillHoles(input,size);if(protectedMask)input=Uint8Array.from(input,(v,i)=>v&&!protectedMask[i]?1:0);}
@@ -36,12 +50,14 @@ function process(mask,size,o,fitted=null){
  if(geometry){
   // Retain fitted edges without raster stair-steps, but never bypass cut settings.
   if(o.offset===0&&o.round===0)result.loops=geometryLoops;
-  result.polygons=fitted.polygons;
+  result.polygons=mesh?.polygons||fitted.polygons;
  }
- if(fitted){result.branches=fitted.branches;result.crystalMaterial=material||fitted.loops;}
+ if(fitted){result.branches=fitted.branches;result.crystalMaterial=material||fitted.loops;result.previewPolygons=mesh?.polygons||fitted.polygons;result.crystalMesh=mesh;result.baseCrystalLoops=geometryLoops;}
  if(o.gaps>0)result.loops=Features.closeGaps(result.loops,o.gaps*size/o.size);
- if(o.symmetry===100&&result.loops.length)result.loops=E.enforce(result.loops,size,fitted?fitted.axis*Math.PI/180:E.axis(result.mask,size));
- const final=clean(result.loops,o.fill&&!structural?.count,o.islands);
+ if(o.symmetry===100&&result.loops.length&&!(geometry&&mesh&&o.offset===0&&o.round===0&&!(o.gaps>0)))result.loops=E.enforce(result.loops,size,fitted?fitted.axis*Math.PI/180:E.axis(result.mask,size));
+ // Fill policy has already been resolved in the real cells. Re-filling only
+ // their cut boundary here would reintroduce a preview/export disagreement.
+ const final=clean(result.loops,o.fill&&!structural?.count&&!(geometry&&mesh&&o.offset===0&&o.round===0&&!(o.gaps>0)),o.islands);
  result.structuralVoids=structural?.count||0;
  result.loops=final.loops;result.components=final.components;result.removed=Math.max(result.removed,final.removed);
  // An intentional hanger is added last: symmetry, closing and filling must

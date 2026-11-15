@@ -10,10 +10,15 @@ const Shared=typeof module!=='undefined'?require('./shared-polygons.js'):root.Sh
 const Mesh=typeof module!=='undefined'?require('./shared-mesh.js'):root.SharedMesh;
 const Core=typeof module!=='undefined'?require('./crystal-core.js'):root.CrystalCore;
 const Evidence=typeof module!=='undefined'?require('./image-evidence.js'):root.ImageEvidence;
+const Boundary=typeof module!=='undefined'?require('./boundary-fit.js'):root.BoundaryFit;
 const Clipper=typeof module!=='undefined'?require('./vendor/clipper.js'):root.ClipperLib;
 function fit(pixels,size,intensity,invert=false,detail=100,symmetry=0,measured=null,threshold=230){
  const model=measured||B.extract(pixels,size,invert,symmetry,threshold);if(!model)return null;
  const {n,scale,target,axis}=model,s=intensity/100,prepared=S.prepare(model);
+ // The fitted silhouette guides the shared cells; it no longer replaces their
+ // perimeter after fitting. Keep full artboard resolution for small real tips.
+ const evidence=Evidence.analyze(pixels,size,invert,threshold);
+ prepared.boundaryEvidence={size,loops:F.contours(evidence.filled,size,0).filter(p=>C.area(p)>0).map(p=>Boundary.fit(p,(1.5+7.5*(1-detail/100)**1.5)*size/768))};
  let tree,pieces,cutPolygons,meshLoops,hub=Core.fit(model,symmetry),traceHub=hub;
  if(prepared.slots){tree=S.deform(prepared,Mesh.structureDetail(detail),symmetry);const mesh=Mesh.fit(prepared,detail,symmetry,Core.fit(model,100),Core.fit(model,0));pieces=mesh.pieces;cutPolygons=mesh.cutPolygons;meshLoops=mesh.loops;const core=pieces.find(p=>p.kind==='core');hub={...hub,polygon:core.polygon,center:[0,1].map(k=>core.polygon.reduce((s,p)=>s+p[k],0)/6)}}
  else{tree=B.prune(model,detail);const profiles=R.measure(model).profiles;pieces=tree.flatMap(t=>R.pieces(t.path,profiles[t.sourceId],detail,intensity).map(p=>({...p,branchId:t.id,polygon:p.polygon.map(v=>v.map(x=>x*scale)),start:p.start.map(x=>x*scale),end:p.end.map(x=>x*scale)})));tree=tree.map(t=>({...t,path:t.path.map(p=>p.map(v=>v*scale)),start:t.start.map(v=>v*scale),end:t.end.map(v=>v*scale),length:t.length*scale}))}
@@ -33,7 +38,7 @@ function fit(pixels,size,intensity,invert=false,detail=100,symmetry=0,measured=n
  let traceMask=null;
  const alignedTrace=()=>{if(!traceMask&&prepared.slots){const ribbons=Shared.trace(prepared,S.deform(prepared,detail,symmetry),symmetry);ribbons.push(traceHub.polygon);const clip=new Clipper.Clipper(),out=new Clipper.Paths();clip.AddPaths(ribbons.map(p=>(C.area(p)<0?p.slice().reverse():p).map(([x,y])=>({X:Math.round(x*1e4),Y:Math.round(y*1e4)}))),Clipper.PolyType.ptSubject,true);clip.Execute(Clipper.ClipType.ctUnion,out,Clipper.PolyFillType.pftNonZero,Clipper.PolyFillType.pftNonZero);traceMask=C.raster(out.map(p=>p.map(v=>[v.X/1e4,v.Y/1e4])),size)}return traceMask};
  let materialCache=null;const material=fill=>{if(!materialCache)materialCache=Evidence.constrain(loops,Evidence.analyze(pixels,size,invert,threshold),detail,symmetry,axis,symmetry?alignedTrace():null);return fill?materialCache.filled:materialCache.open};
- return {material,alignedTrace,polygons,pieces,branches,loops,mask:C.raster(loops,size),match:union?intersection/union:0,axis:axis*180/Math.PI,source:prepared.source,hub,inferredBranchCount:tree.filter(t=>!t.observed).length,armCount:tree.filter(t=>t.parent===null).length,branchCount:tree.length,tree};
+ return {material,alignedTrace,polygons,pieces,cutPolygons,branches,loops,mask:C.raster(loops,size),match:union?intersection/union:0,axis:axis*180/Math.PI,source:prepared.source,hub,inferredBranchCount:tree.filter(t=>!t.observed).length,armCount:tree.filter(t=>t.parent===null).length,branchCount:tree.length,tree};
 }
 root.ImageCrystal={fit};if(typeof module!=='undefined')module.exports=root.ImageCrystal;
 })(globalThis);

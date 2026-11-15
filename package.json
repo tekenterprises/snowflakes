@@ -1,12 +1,12 @@
 {
   "name": "snowflake-studio",
-  "version": "33.0.0",
+  "version": "34.0.0",
   "private": true,
   "description": "Browser-local snowflake reconstruction and laser-cut SVG editor",
   "scripts": {
     "build": "node scripts/check-static.cjs",
     "dev": "python3 -m http.server 8787 --directory dist",
-    "test": "node tests/reference-library.cjs && node tests/preview-independence.cjs && node tests/plate-geometry.cjs && node tests/shared-mesh-unit.cjs && node tests/material-evidence.cjs && node tests/boundary-fit.cjs && node tests/structural-voids.cjs"
+    "test": "node tests/reference-library.cjs && node tests/preview-independence.cjs && node tests/plate-geometry.cjs && node tests/shared-mesh-unit.cjs && node tests/material-evidence.cjs && node tests/boundary-fit.cjs && node tests/structural-voids.cjs && node tests/cavity-cells.cjs && node tests/crystal-voids.cjs && node tests/crystal-upload.cjs"
   },
   "engines": {
     "node": ">=20"

@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "snowflake-studio",
+  "name": "snow-wiz",
   "compatibility_date": "2026-11-11",
   "assets": {
     "directory": "./dist"

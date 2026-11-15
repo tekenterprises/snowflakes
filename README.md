@@ -113,3 +113,16 @@ Tests now assess added and omitted material together and net area bias, alongsid
 Fill interior holes now fills unconfirmed cavities while retaining structural ones. Classification runs on the initial non-crystal mask, independently of visible layers and cut geometry. Matching uses centroid position, area ratio and sampled shape overlap: four of six matching arms, or seven distinct arm-side observations across at least four arms. A central cavity can qualify through its own strong sixfold shape agreement. Local mode retains observed holes only; symmetry blends toward supported repeated families. The same classified mask is used for non-crystal cuts, crystal cuts and guides. Offset, rounding and close-gap operations still apply after selective filling; the intentional hanger remains last.
 
 This is a geometric confidence rule, not proof that a cavity is physically real. Repeated processing artifacts can still qualify. Manual void overrides are not included.
+
+
+### Cell-derived crystal cuts (v34)
+
+The crystal cut exterior now comes from the displayed crystal cells. Balanced
+full-resolution image boundaries guide those cells instead of replacing their
+perimeter afterward. Refinement keeps branch correspondence and bounds added
+facets; simple flakes should retain simple outlines. Cavities become actual
+cell geometry. Offset, rounding, gap closing, and hanger remain later cut operations.
+
+See [material geometry](docs/material-mesh.md) for the contracts and verification
+commands, and [setup](docs/SETUP.md) for the local environment. See [deployment](docs/DEPLOYMENT.md) for the Cloudflare target and release checks.
+A source version does not establish live deployment status.

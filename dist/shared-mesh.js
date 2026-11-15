@@ -5,6 +5,7 @@ const R=typeof module!=='undefined'?require('./branch-regions.js'):root.BranchRe
 const S=typeof module!=='undefined'?require('./structural-model.js'):root.StructuralModel;
 const PF=typeof module!=='undefined'?require('./polygon-fit.js'):root.PolygonFit;
 const Surface=typeof module!=='undefined'?require('./silhouette-mesh.js'):root.SilhouetteMesh;
+const Earcut=typeof module!=='undefined'?require('./vendor/earcut.min.js'):root.earcut;
 const cache=new WeakMap(),clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
 const signed=p=>p.reduce((v,a,i)=>{const b=p[(i+1)%p.length];return v+a[0]*b[1]-a[1]*b[0]},0)/2;
@@ -55,26 +56,116 @@ function build(model,detail,hub,localHub){
  // Export uses the same subsegments on both sides of every shared edge. This
  // prevents coordinate rounding from turning a T-junction into a hairline gap.
  const resolved=resolveConstraints(constraints);constraints.clear();for(const [id,row] of resolved)constraints.set(id,row);
- const mesh={vertices,faces,owners,ideal,means,profiles,constraints,coreIds,detail,silhouette:!!material};
- if(material){cutEdges(mesh);mesh.boundaries=boundaryEdges(mesh);mesh.exterior=new Set(mesh.boundaries.flat());}
+ const mesh={vertices,faces,owners,ideal,means,profiles,constraints,coreIds,detail,silhouette:!!material,initialFaceCount:faces.length,maxFaceCount:Math.floor(faces.length*1.1)};
+ cutEdges(mesh);mesh.boundaries=boundaryEdges(mesh);mesh.exterior=new Set(mesh.boundaries.flat());
  mesh.faithful=fitImage(mesh,model,localHub);
  // A shape that needs another facet on one observed arm gets that same facet
  // definition on every half-arm, rather than independently changing its topology.
  for(let pass=0;pass<(detail>=60?2:0);pass++){if(!refine(mesh))break;mesh.faithful=fitImage(mesh,model,localHub);}
- cutEdges(mesh);mesh.boundaries=boundaryEdges(mesh);return mesh;
+ cutEdges(mesh);mesh.boundaries=boundaryEdges(mesh);mesh.exterior=new Set(mesh.boundaries.flat());
+ if(model.boundaryEvidence&&detail>=120)addBoundaryFeatures(mesh,model);
+ // Full-resolution evidence is a guide, not permission to damage a previously
+ // sound interpretation. Compare complete valid poses, including their topology,
+ // instead of accepting every nearest-contour projection unconditionally.
+ if(model.boundaryEvidence){const baseline=build({...model,boundaryEvidence:null},detail,hub,localHub),before=boundaryError(baseline,model),after=boundaryError(mesh,model);if(before.total<after.total){baseline.boundaryComparison={before,after,selected:'scaffold'};return baseline;}mesh.boundaryComparison={before,after,selected:'evidence'};}
+ return mesh;
 }
 function cutEdges(mesh){
  for(const f of mesh.faces)f.cutIds=f.ids.flatMap((a,k)=>{const b=f.ids[(k+1)%f.ids.length],A=mesh.vertices[a],B=mesh.vertices[b],dx=B[0]-A[0],dy=B[1]-A[1],den=dx*dx+dy*dy,along=[];for(let id=0;id<mesh.vertices.length;id++){const P=mesh.vertices[id],u=((P[0]-A[0])*dx+(P[1]-A[1])*dy)/den;if(u>=-1e-8&&u<1-1e-8&&Math.abs(cross(A,B,P))<1e-7*Math.sqrt(den))along.push({id,u})}return along.sort((a,b)=>a.u-b.u).map(v=>v.id)});
 }
 function boundaryEdges(mesh){const edges=new Map();for(const f of mesh.faces)for(let i=0;i<f.cutIds.length;i++){const a=f.cutIds[i],b=f.cutIds[(i+1)%f.cutIds.length];if(a===b)continue;const key=a+':'+b,reverse=b+':'+a;if(edges.has(reverse)){const edge=edges.get(reverse);if(--edge.count===0)edges.delete(reverse);}else if(edges.has(key))edges.get(key).count++;else edges.set(key,{a,b,count:1});}const outgoing=new Map();for(const [key,{a,b}] of edges){if(!outgoing.has(a))outgoing.set(a,[]);outgoing.get(a).push([key,b]);}const loops=[];while(edges.size){const start=edges.values().next().value.a,ring=[];let at=start;do{ring.push(at);const next=outgoing.get(at)?.find(([key])=>edges.has(key));if(!next)throw Error('Open shared-mesh boundary');const edge=edges.get(next[0]);if(--edge.count===0)edges.delete(next[0]);at=next[1];}while(at!==start);if(ring.length>=3)loops.push(ring);}return loops;}
 
+// Add the same optional boundary corner to every copy of a role. It is a free
+// vertex, inserted after the old T-junction constraints have been resolved; an
+// inferred tip can therefore leave the former straight edge. Most faces gain
+// a corner without gaining a cell. Only a full hexagon needs a common split.
+function boundaryError(mesh,model){const evidence=model.boundaryEvidence,size=evidence.size,scale=size/(model.n*model.scale),C=typeof module!=='undefined'?require('./crystal'):root.Crystal,target=C.raster(evidence.loops,size),mask=C.raster(mesh.boundaries.map(r=>r.map(i=>mesh.faithful[i].map(v=>v*scale))),size);let missing=0,excess=0;for(let i=0;i<mask.length;i++){if(target[i]&&!mask[i])missing++;if(!target[i]&&mask[i])excess++;}return {missing,excess,total:missing+excess};}
+// Candidate edges can contain old T-junctions. Walk their complete common
+// subdivision; an unsplit corner-to-corner lookup would miss real exterior edges.
+function exteriorChain(face,a,b,exterior){const ids=face.mirror?face.cutIds.slice().reverse():face.cutIds,start=ids.indexOf(a);if(start<0)return null;const chain=[a];for(let k=1;k<=ids.length;k++){const next=ids[(start+k)%ids.length],previous=chain.at(-1);if(!exterior.has(previous+':'+next)&&!exterior.has(next+':'+previous))return null;chain.push(next);if(next===b)return chain;}return null;}
+// A shared diagonal must work in every canonical and faithful embedding. Small
+// dynamic programming over the affected face avoids a fixed, sometimes flat,
+// seven-corner split. Goal convexity prefers splits that let the feature move.
+function featureParts(records,vertices,faithful,goals,maxParts){const count=records[0].ids.length,memo=new Map();
+ const polygon=(record,role,positions)=>{const p=role.map(k=>positions[record.ids[k]]);return record.face.mirror?p.reverse():p;};
+ const feasible=role=>records.every(record=>[vertices,faithful].every(positions=>{const p=polygon(record,role,positions);return signed(p)>1e-8&&convex(p);}));
+ function solve(role){const key=role.join(',');if(memo.has(key))return memo.get(key);let best=null;if(role.length<=6&&feasible(role)){const bad=records.reduce((n,record)=>n+(convex(polygon(record,role,goals))?0:1),0);best={parts:[role],score:1+bad*8};}
+  for(let i=0;i<role.length;i++)for(let j=i+2;j<role.length;j++){if(i===0&&j===role.length-1)continue;const left=role.slice(i,j+1),right=role.slice(j).concat(role.slice(0,i+1));if(!feasible(left)||!feasible(right))continue;const a=solve(left),b=solve(right);if(!a||!b||a.parts.length+b.parts.length>maxParts)continue;const score=a.score+b.score;if(!best||score<best.score)best={parts:a.parts.concat(b.parts),score};}
+  memo.set(key,best);return best;
+ }const result=solve(Array.from({length:count},(_,i)=>i));return result?{parts:result.parts,goalConvex:result.score===result.parts.length}:null;
+}
+// A concave neck may require an interior vertex: boundary-only diagonals can
+// be degenerate in copies whose new corners remain collinear. Choose each local
+// center inside both the old face and the goal's visibility kernel, then merge
+// adjacent fan triangles with one common partition across all embeddings.
+function featureFan(records,trial,maxParts){const n=records[0].ids.length,start=trial.vertices.length;
+ for(const record of records){let initial=record.ids.map(id=>trial.faithful[id]),goal=record.ids.map(id=>trial.goals[id]);if(record.face.mirror){initial=initial.slice().reverse();goal=goal.slice().reverse();}const kernel=intersect(hull(initial),goal);if(kernel.length<3||signed(kernel)<1e-6){trial.vertices.length=trial.faithful.length=trial.goals.length=trial.owners.length=start;for(const r of records)if(r.ids.length>n)r.ids.pop();return null;}const center=[0,1].map(k=>kernel.reduce((sum,p)=>sum+p[k],0)/kernel.length),canonical=[0,1].map(k=>record.ids.reduce((sum,id)=>sum+trial.vertices[id][k],0)/n),id=trial.vertices.length;trial.vertices.push(canonical);trial.faithful.push(center);trial.goals.push(center);trial.owners.push(new Set(record.ids.flatMap(id=>[...trial.owners[id]])));record.ids.push(id);}
+ const feasible=role=>records.every(record=>[trial.vertices,trial.faithful,trial.goals].every(positions=>{let p=role.map(i=>positions[record.ids[i]]);if(record.face.mirror)p.reverse();return signed(p)>1e-8&&convex(p);}));let best=null;
+ for(let startAt=0;startAt<n;startAt++){const dp=Array(n+1).fill(null);dp[n]=[];for(let i=n-1;i>=0;i--)for(let length=1;length<=4&&i+length<=n;length++){if(!dp[i+length])continue;const role=[n,...Array.from({length:length+1},(_,k)=>(startAt+i+k)%n)];if(!feasible(role))continue;const parts=[role,...dp[i+length]];if(parts.length<=maxParts&&(!dp[i]||parts.length<dp[i].length))dp[i]=parts;}if(dp[0]&&(!best||dp[0].length<best.length))best=dp[0];}
+ if(!best){trial.vertices.length=trial.faithful.length=trial.goals.length=trial.owners.length=start;for(const r of records)r.ids.pop();}return best;
+}
+// Compatible local triangulation. Each embedding triangulates the same ordered
+// boundary roles; omitted collinear roles are reinserted by splitting their
+// incident triangle. Overlay only those diagonals in a convex reference polygon,
+// then map vertices back barycentrically. This changes one small face family,
+// never overlays the twelve photographic silhouettes.
+function compatibleFeature(records,trial,maxParts){const n=records[0].ids.length;if(n>12)return null;const reference=Array.from({length:n},(_,i)=>[1000*Math.cos(i*2*Math.PI/n),1000*Math.sin(i*2*Math.PI/n)]),embeddings=[],triangulations=new Map();
+ function triangles(p,mirror){const o=p[0],dx=p[1][0]-o[0],dy=p[1][1]-o[1],length=Math.hypot(dx,dy);if(length<1e-6)return null;const q=p.map(v=>{const x=v[0]-o[0],y=v[1]-o[1];return [Math.round((x*dx+y*dy)/(length*length)*1e9)/1e9,Math.round((mirror?-1:1)*(y*dx-x*dy)/(length*length)*1e9)/1e9];}),boundary=Array.from({length:n},(_,i)=>i);for(let changed=true;changed&&boundary.length>3;){changed=false;for(let i=0;i<boundary.length;i++){const a=p[boundary[(i+boundary.length-1)%boundary.length]],b=p[boundary[i]],c=p[boundary[(i+1)%boundary.length]];if(Math.abs(cross(a,c,b))<=1e-9*Math.hypot(c[0]-a[0],c[1]-a[1])){boundary.splice(i,1);changed=true;break;}}}const raw=Earcut(boundary.flatMap(i=>q[i]),null,2),out=[];for(let i=0;i<raw.length;i+=3)out.push(raw.slice(i,i+3).map(j=>boundary[j]));const used=new Set(out.flat());
+  for(let id=0;id<n;id++){if(used.has(id))continue;let found=false;for(let k=0;k<out.length&&!found;k++)for(let j=0;j<3;j++){const a=out[k][j],b=out[k][(j+1)%3],c=out[k][(j+2)%3],A=q[a],B=q[b],P=q[id],vx=B[0]-A[0],vy=B[1]-A[1],den=vx*vx+vy*vy,t=((P[0]-A[0])*vx+(P[1]-A[1])*vy)/den;if(t<=1e-10||t>=1-1e-10||Math.abs(cross(A,B,P))>1e-8*Math.sqrt(den))continue;out.splice(k,1,[a,id,c],[id,b,c]);used.add(id);found=true;break;}if(!found)return null;}
+  if(out.length!==n-2)return null;let sum=0;for(const ids of out){let shape=ids.map(i=>p[i]);if(mirror)shape.reverse();const a=signed(shape);if(a<=1e-8)return null;sum+=a;}if(Math.abs(sum-Math.abs(signed(p)))>1e-6)return null;return out;
+ }
+ let canonicalTriangles=null;for(const record of records){const rows=[];for(const positions of [trial.vertices,trial.faithful,trial.goals]){const p=record.ids.map(id=>positions[id]),ids=positions===trial.vertices&&canonicalTriangles?canonicalTriangles:triangles(p,record.face.mirror);if(positions===trial.vertices&&!canonicalTriangles)canonicalTriangles=ids;if(!ids)return null;const key=ids.map(t=>t.slice().sort((a,b)=>a-b).join(',')).sort().join('|');if(!triangulations.has(key))triangulations.set(key,ids);rows.push({p,ids});}embeddings.push(rows);}
+ let atoms=[reference];for(const ids of triangulations.values()){const next=[];for(const atom of atoms)for(const face of ids){const triangle=hull(face.map(i=>reference[i])),part=intersect(atom,triangle);if(part.length>=3&&signed(part)>1e-7)next.push(part);}atoms=next;if(atoms.length>128)return null;}
+ const points=[],lookup=new Map(),vertex=p=>{const key=p.map(v=>Math.round(v*1e7)).join(',');if(lookup.has(key))return lookup.get(key);const id=points.length;lookup.set(key,id);points.push(p);return id;};reference.forEach(vertex);let roles=atoms.map(p=>p.map(vertex));if(points.length>192)return null;
+ const mapped=embeddings.map(rows=>rows.map(({p,ids})=>points.map((point,index)=>{if(index<n)return p[index];for(const face of ids){const [A,B,C]=face.map(i=>reference[i]),den=cross(A,B,C),u=cross(point,B,C)/den,v=cross(A,point,C)/den,w=1-u-v;if(Math.min(u,v,w)<-1e-7)continue;return [0,1].map(k=>u*p[face[0]][k]+v*p[face[1]][k]+w*p[face[2]][k]);}return null;})));if(mapped.some(rows=>rows.some(ps=>ps.some(p=>!p||p.some(v=>!Number.isFinite(v))))))return null;
+ function validRole(role){return mapped.every((rows,i)=>rows.every(ps=>{let p=role.map(id=>ps[id]);if(records[i].face.mirror)p.reverse();return signed(p)>1e-8&&convex(p);}));}
+ // The reference overlay cells can have more than six corners. Its convex
+ // atoms lie in one affine triangle in every embedding, so fan splitting is safe.
+ roles=roles.flatMap(role=>role.length<=6?[role]:role.slice(1,-1).map((_,i)=>[role[0],role[i+1],role[i+2]]));if(roles.some(role=>!validRole(role)))return null;
+ function joined(a,b){const edges=new Map();for(const ring of [a,b])for(let i=0;i<ring.length;i++){const x=ring[i],y=ring[(i+1)%ring.length],reverse=y+':'+x;if(edges.has(reverse))edges.delete(reverse);else edges.set(x+':'+y,[x,y]);}if(edges.size===a.length+b.length)return null;const first=edges.values().next().value,ring=[];let at=first[0];while(edges.size){ring.push(at);const pair=[...edges.entries()].find(([,e])=>e[0]===at);if(!pair)return null;edges.delete(pair[0]);at=pair[1][1];if(at===ring[0])break;}if(edges.size)return null;
+  for(let changed=true;changed&&ring.length>3;){changed=false;for(let i=0;i<ring.length;i++){const a=ring[(i+ring.length-1)%ring.length],b=ring[i],c=ring[(i+1)%ring.length];if(mapped.every(rows=>rows.every(ps=>Math.abs(cross(ps[a],ps[c],ps[b]))<1e-7*Math.hypot(ps[c][0]-ps[a][0],ps[c][1]-ps[a][1])))){ring.splice(i,1);changed=true;break;}}}return ring.length<=6&&validRole(ring)?ring:null;
+ }
+ while(true){let merged=false;for(let i=0;i<roles.length&&!merged;i++)for(let j=i+1;j<roles.length;j++){const ring=joined(roles[i],roles[j]);if(ring){roles[i]=ring;roles.splice(j,1);merged=true;break;}}if(!merged)break;}if(roles.length>maxParts)return null;
+ const total=reference.reduce((s,a,i)=>{const b=reference[(i+1)%n];return s+a[0]*b[1]-a[1]*b[0]},0)/2,covered=roles.reduce((s,r)=>s+signed(r.map(i=>points[i])),0);if(Math.abs(total-covered)>1e-3)return null;
+ for(let i=0;i<records.length;i++){const record=records[i];for(let j=n;j<points.length;j++){const id=trial.vertices.length;trial.vertices.push(mapped[i][0][j]);trial.faithful.push(mapped[i][1][j]);trial.goals.push(mapped[i][2][j]);trial.owners.push(new Set(record.ids.flatMap(k=>[...trial.owners[k]])));record.ids.push(id);record.newIds.push(id);record.initials.push(mapped[i][1][j]);if(record.targets)record.targets.push(mapped[i][2][j]);}}
+ return roles;
+}
+// Keep only a few strong turns from an ordered evidence run. A blunt stub
+// needs its neck and end corners; one extremum alone creates a triangular ear.
+function featureCorners(contour){const keep=[0,contour.length-1];for(let pass=0;pass<3;pass++){let best=null;for(let k=0;k<keep.length-1;k++){const a=contour[keep[k]],b=contour[keep[k+1]],dx=b[0]-a[0],dy=b[1]-a[1],den=dx*dx+dy*dy;for(let i=keep[k]+1;i<keep[k+1];i++){const p=contour[i],u=clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dy)/(den||1),0,1),distance=Math.hypot(p[0]-a[0]-u*dx,p[1]-a[1]-u*dy);if(distance>=1.5&&(!best||distance>best.distance))best={i,distance};}}if(!best)break;keep.push(best.i);keep.sort((a,b)=>a-b);}return keep.slice(1,-1).map(i=>contour[i]);}
+function matchedCorners(contour,corners,count){const indices=[0,...corners.map((_,i)=>Math.round((i+1)*(count+1)/(corners.length+1))),count+1],points=[contour[0],...corners,contour.at(-1)],out=[];for(let k=1;k<=count;k++){const i=indices.findIndex((v,j)=>j+1<indices.length&&k>=v&&k<=indices[j+1]),t=(k-indices[i])/(indices[i+1]-indices[i]);out.push(points[i].map((v,d)=>v+t*(points[i+1][d]-v)));}return out;}
+function addBoundaryFeatures(mesh,model){const before=boundaryError(mesh,model),exterior=new Set(mesh.boundaries.flatMap(r=>r.map((a,i)=>a+':'+r[(i+1)%r.length]))),groups=new Map();for(const face of mesh.faces){if(face.kind==='core')continue;if(!groups.has(face.pieceSlotId))groups.set(face.pieceSlotId,[]);groups.get(face.pieceSlotId).push(face);}const candidates=[];
+ for(const [key,faces] of groups){const n=faces[0].ids.length;for(let edge=0;edge<n;edge++){const records=[];let compatible=true;for(const face of faces){const ids=face.mirror?face.ids.slice().reverse():face.ids,a=ids[edge],b=ids[(edge+1)%n],chain=exteriorChain(face,a,b,exterior);if(!chain){compatible=false;break;}const found=Surface.feature(model,mesh.vertices[face.mirror?b:a],mesh.vertices[face.mirror?a:b],face.arm,[mesh.faithful[face.mirror?b:a],mesh.faithful[face.mirror?a:b]]);if(found&&face.mirror){found.u=1-found.u;found.contour.reverse();}records.push({face,a,b,chain,found});}const supported=records.filter(r=>r.found);if(compatible&&supported.length&&records.every(r=>r.chain.length===records[0].chain.length))candidates.push({key,records,edge,priority:Math.max(...supported.map(r=>r.found.priority))});}}
+ let accepted=0,error=before;const used=new Set(),attempts=[];
+ for(const candidate of candidates.sort((a,b)=>b.priority-a.priority)){if(accepted>=3)break;if(used.has(candidate.key))continue;try{const values=candidate.records.filter(r=>r.found).map(r=>r.found.u).sort((a,b)=>a-b),u=values[values.length>>1],seed=candidate.records[0],A=mesh.vertices[seed.a],B=mesh.vertices[seed.b],dx=B[0]-A[0],dy=B[1]-A[1],den=dx*dx+dy*dy,ts=seed.chain.map(id=>((mesh.vertices[id][0]-A[0])*dx+(mesh.vertices[id][1]-A[1])*dy)/den),segment=ts.findIndex((v,i)=>i+1<ts.length&&u>v+1e-5&&u<ts[i+1]-1e-5);if(segment<0)continue;
+  const cornerCount=Math.max(...candidate.records.map(r=>r.found?featureCorners(r.found.contour).length:0));if(!cornerCount)continue;
+  const trial={...mesh,vertices:mesh.vertices.slice(),faithful:mesh.faithful.slice(),goals:mesh.faithful.slice(),owners:mesh.owners.slice(),faces:mesh.faces.map(f=>({...f}))},records=[];
+  for(const record of candidate.records){const {face,chain}=record,ids=face.mirror?face.ids.slice().reverse():face.ids.slice(),left=chain[segment],right=chain[segment+1],L=mesh.vertices[left],R=mesh.vertices[right],newIds=[],initials=[],targets=record.found?matchedCorners(record.found.contour,featureCorners(record.found.contour),cornerCount).map(p=>{const a=mesh.faithful[left],b=mesh.faithful[right],dx=b[0]-a[0],dy=b[1]-a[1];if(cross(a,b,p)*(face.mirror?-1:1)<=0)return p;const u=clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dy)/(dx*dx+dy*dy),0,1);return [a[0]+u*dx,a[1]+u*dy];}):null;
+   for(let j=0;j<cornerCount;j++){const t=(j+1)/(cornerCount+1),id=trial.vertices.length,canonical=L.map((v,k)=>v+t*(R[k]-v)),initial=mesh.faithful[left].map((v,k)=>v+t*(mesh.faithful[right][k]-v));trial.vertices.push(canonical);trial.faithful.push(initial);trial.goals.push(targets?.[j]||initial);trial.owners.push(new Set([...mesh.owners[left],...mesh.owners[right]]));newIds.push(id);initials.push(initial);}
+   const inserted=[];if(left!==record.a)inserted.push(left);inserted.push(...newIds);if(right!==record.b)inserted.push(right);ids.splice(candidate.edge+1,0,...inserted);records.push({...record,ids,newIds,initials,targets});
+  }
+  const budget=1+Math.floor((mesh.maxFaceCount-mesh.faces.length)/records.length),diagonals=featureParts(records,trial.vertices,trial.faithful,trial.goals,budget);let parts=diagonals?.parts,method='diagonals';if(!diagonals?.goalConvex){const fan=featureFan(records,trial,budget);if(fan){parts=fan;method='fan';}else{const compatible=compatibleFeature(records,trial,budget);if(compatible){parts=compatible;method='compatible';}}}if(!parts){attempts.push({role:candidate.key,reason:'no shared convex partition'});continue;}
+  const replacements=new Map(records.map(record=>[record.face.pieceSlotId+'|'+record.face.arm+'|'+record.face.mirror,parts.map((role,k)=>{let ids=role.map(i=>record.ids[i]);if(record.face.mirror)ids.reverse();return {...record.face,ids,sideCount:ids.length,pieceSlotId:record.face.pieceSlotId+(parts.length>1?'.boundary'+k:'')};})]));trial.faces=trial.faces.flatMap(face=>replacements.get(face.pieceSlotId+'|'+face.arm+'|'+face.mirror)||[face]);
+  if(!valid(trial,trial.vertices)||!valid(trial,trial.faithful)){attempts.push({role:candidate.key,reason:'invalid initial partition'});continue;}
+  // Pin accepted vertices. Only the inserted corners move, so a local feature
+  // cannot be rejected because another pass drifted an unrelated branch.
+  let moved=0;for(const record of records){if(!record.targets)continue;for(const alpha of [1,.75,.5,.25,.125]){const positions=trial.faithful.slice();record.newIds.forEach((id,j)=>positions[id]=record.initials[j].map((v,k)=>v+alpha*(record.targets[j][k]-v)));if(valid(trial,positions)){trial.faithful=positions;moved++;break;}}}
+  if(!moved){attempts.push({role:candidate.key,reason:'no feasible feature movement'});continue;}cutEdges(trial);trial.boundaries=boundaryEdges(trial);trial.exterior=new Set(trial.boundaries.flat());const after=boundaryError(trial,model);if(error.total-after.total<=Math.max(0,(parts.length-1)*records.length)*2.25*(model.boundaryEvidence.size/768)**2){attempts.push({role:candidate.key,reason:'no image improvement',before:error,after});continue;}
+  Object.assign(mesh,trial);error=after;used.add(candidate.key);accepted++;attempts.push({role:candidate.key,accepted:true,method,cellsAdded:(parts.length-1)*records.length,after});
+  }catch(error){attempts.push({role:candidate.key,reason:'optional geometry rejected',error:String(error.message||error)});}
+ }
+ mesh.boundaryFeatureCount=accepted;mesh.boundaryFit={before,after:error,accepted:accepted>0,attempts};return accepted>0;
+}
+
 function refine(mesh){const groups=new Map();for(const f of mesh.faces){if(f.kind==='core'||f.ids.length<4)continue;if(!groups.has(f.pieceSlotId))groups.set(f.pieceSlotId,[]);groups.get(f.pieceSlotId).push(f);}
  const violation=p=>p.reduce((v,b,i)=>v+Math.max(0,-cross(p[(i+p.length-1)%p.length],b,p[(i+1)%p.length])),0),choices=[];
  for(const [key,faces] of groups){const n=faces[0].ids.length,ordered=faces.map(f=>f.mirror?f.ids.slice().reverse():f.ids),polys=ordered.map(ids=>ids.map(i=>mesh.goals[i])),baseline=polys.reduce((s,p)=>s+violation(p),0),residual=Math.max(...ordered.flat().map(i=>Math.hypot(...mesh.goals[i].map((v,k)=>v-mesh.faithful[i][k]))));if(baseline<1e-5||residual<3)continue;let best=null;
-  for(let a=0;a<n;a++)for(let b=a+2;b<n;b++){if(a===0&&b===n-1)continue;const roles=[Array.from({length:b-a+1},(_,k)=>a+k),Array.from({length:n-b+a+1},(_,k)=>(b+k)%n)],score=polys.reduce((s,p)=>s+roles.reduce((v,indices)=>v+violation(indices.map(i=>p[i])),0),0);if(!best||score<best.score)best={roles,score};}
+  for(let a=0;a<n;a++)for(let b=a+2;b<n;b++){if(a===0&&b===n-1)continue;const roles=[Array.from({length:b-a+1},(_,k)=>a+k),Array.from({length:n-b+a+1},(_,k)=>(b+k)%n)];if(!ordered.every(ids=>roles.every(role=>{const p=role.map(i=>mesh.vertices[ids[i]]),a=signed(p);return Math.abs(a)>1e-8&&convex(a>0?p:p.slice().reverse());})))continue;const score=polys.reduce((s,p)=>s+roles.reduce((v,indices)=>v+violation(indices.map(i=>p[i])),0),0);if(!best||score<best.score)best={roles,score};}
   if(best&&best.score<baseline*.75)choices.push({key,...best,priority:residual*(1-best.score/baseline)});
  }
- const selected=new Map(choices.sort((a,b)=>b.priority-a.priority).slice(0,4).map(c=>[c.key,c]));if(!selected.size)return false;
+ // A coordinated role split is repeated on all twelve half-arms. Bound the
+ // total increase rather than allowing photo noise to multiply the cell count.
+ const selected=new Map();let remaining=mesh.maxFaceCount-mesh.faces.length;for(const choice of choices.sort((a,b)=>b.priority-a.priority)){const cost=groups.get(choice.key).length;if(cost>remaining)continue;selected.set(choice.key,choice);remaining-=cost;if(selected.size===4)break;}if(!selected.size)return false;
  mesh.faces=mesh.faces.flatMap(f=>{const choice=selected.get(f.pieceSlotId);if(!choice)return [f];const ids=f.mirror?f.ids.slice().reverse():f.ids;return choice.roles.map((role,k)=>{const next=role.map(i=>ids[i]);if(f.mirror)next.reverse();return {...f,ids:next,pieceSlotId:f.pieceSlotId+'.'+k,sideCount:next.length}})});return true;
 }
 
@@ -100,7 +191,7 @@ function valid(mesh,positions){const polygons=mesh.faces.map(f=>f.ids.map(i=>pos
  const order=boxes.map((_,i)=>i).sort((a,b)=>boxes[a][0]-boxes[b][0]);for(let i=0;i<order.length;i++){const a=order[i],A=boxes[a];for(let j=i+1;j<order.length;j++){const b=order[j],B=boxes[b];if(B[0]>=A[2]-1e-7)break;if(B[1]>=A[3]-1e-7||A[1]>=B[3]-1e-7)continue;if(overlaps(polygons[a],polygons[b]))return false;}}return true;
 }
 function fitImage(mesh,model,localHub){const local=S.deform(model,Math.min(100,mesh.detail),0),goals=mesh.vertices.map((p,i)=>{const ids=[...mesh.owners[i]];if(!ids.length)return p.slice();const candidates=ids.map(id=>{const t=mesh.ideal[id],dest=local[id],v=projection(p,t),side=v.w<0?0:1,canonical=mesh.means.get(t.slotId),source=mesh.profiles[dest.localId],canonWidth=Math.abs(sample(canonical,v.u,t.mirror?1-side:side)),localWidth=Math.abs(sample(source,v.u,side)),ratio=clamp(localWidth/Math.max(.25,canonWidth),.25,4);return point(dest,v.u,v.w*ratio)});return [0,1].map(k=>mean(candidates.map(v=>v[k])))});
- if(mesh.silhouette)for(const i of mesh.exterior){if(mesh.coreIds.includes(i))continue;const arm=Math.max(0,mesh.faces.find(f=>f.ids.includes(i)&&f.arm!==undefined)?.arm||0);goals[i]=Surface.project(model,mesh.vertices[i],arm);}
+ if(mesh.silhouette||model.boundaryEvidence){const tangents=new Map();for(const ring of mesh.boundaries)for(let k=0;k<ring.length;k++){const a=mesh.vertices[ring[(k+ring.length-1)%ring.length]],b=mesh.vertices[ring[(k+1)%ring.length]];tangents.set(ring[k],[b[0]-a[0],b[1]-a[1]]);}for(const i of mesh.exterior){if(mesh.coreIds.includes(i))continue;const arm=Math.max(0,mesh.faces.find(f=>f.ids.includes(i)&&f.arm!==undefined)?.arm||0);goals[i]=mesh.boundaryGoals?.get(i)||Surface.project(model,mesh.vertices[i],arm,tangents.get(i));}}
  if(localHub)mesh.coreIds.forEach((id,k)=>goals[id]=localHub.polygon[k].slice());
  mesh.goals=goals;
  // Core and seam vertices are shared; one feasible mesh is fitted for all arms.

@@ -21,11 +21,26 @@ function snapper(lines){return point=>{const near=[];for(const [a,b] of lines){c
 function partition(material,hub,groups){let remaining=PC.difference(material,[[hub]]);const out=[],lines=[...(material.guides||[]),...[hub,...groups.flatMap(g=>g.polygons)].flatMap(p=>p.map((a,i)=>[a,p[(i+1)%p.length]]))],snap=snapper(lines),decompose=multi=>triangles(multi).map(p=>p.map(snap)).filter(p=>area(p)>1e-4);
  for(const g of groups){if(!g.polygons.length)continue;const region=PC.union(...g.polygons.map(p=>[[p]])),allocated=PC.intersection(remaining,region);out.push({...g,polygons:decompose(allocated)});remaining=PC.difference(remaining,region);}
  const rootGroup=out[0];if(rootGroup)rootGroup.polygons.push(...decompose(remaining));return out;}
-function boundary(model){if(model.silhouetteEdges)return model.silhouetteEdges;const loops=F.contours(model.target,model.n,.35);return model.silhouetteEdges=loops.flatMap(p=>p.map((a,i)=>[a,p[(i+1)%p.length]]));}
-function project(model,p,arm){const t=model.tree.find(t=>t.parent===null&&t.arm===arm),roots=model.tree.filter(t=>t.parent===null),source=t||roots[arm],c=model.n*model.scale/2,axis=model.axis+arm*Math.PI/3,dx=p[0]-c,dy=p[1]-c,L=roots.map(t=>t.length).sort((a,b)=>a-b)[3]*model.scale,ux=(dx*Math.cos(axis)+dy*Math.sin(axis))/L,uy=(-dx*Math.sin(axis)+dy*Math.cos(axis))/L,vx=(source.end[0]-source.start[0])*model.scale,vy=(source.end[1]-source.start[1])*model.scale;
- const q=[source.start[0]*model.scale+ux*vx-uy*vy,source.start[1]*model.scale+ux*vy+uy*vx],local=q.map(v=>v/model.scale);let best=null;
- for(const edge of boundary(model)){const a=edge[0],b=edge[1],dx=b[0]-a[0],dy=b[1]-a[1],den=dx*dx+dy*dy;if(!den)continue;const u=Math.max(0,Math.min(1,((local[0]-a[0])*dx+(local[1]-a[1])*dy)/den)),pt=[a[0]+u*dx,a[1]+u*dy],d=Math.hypot(pt[0]-local[0],pt[1]-local[1]);if(!best||d<best.d)best={d,pt};}
- return best&&best.d<model.n*.06?best.pt.map(v=>v*model.scale):q;
+// Evidence loops are fitted in full artboard pixels. The low-resolution
+// branch mask remains the fallback scaffold, never the final boundary target.
+const evidenceEdges=new WeakMap();
+function boundary(model){const evidence=model.boundaryEvidence;if(evidence?.loops){if(evidenceEdges.has(evidence))return evidenceEdges.get(evidence);const scale=model.n*model.scale/evidence.size,edges=evidence.loops.flatMap(p=>p.map((a,i)=>[a.map(v=>v*scale),p[(i+1)%p.length].map(v=>v*scale)]));evidenceEdges.set(evidence,edges);return edges;}if(model.silhouetteEdges)return model.silhouetteEdges;const loops=F.contours(model.target,model.n,.35);return model.silhouetteEdges=loops.flatMap(p=>p.map((a,i)=>[a.map(v=>v*model.scale),p[(i+1)%p.length].map(v=>v*model.scale)]));}
+function project(model,p,arm,tangent=null){if(!model.boundaryEvidence)tangent=null;const t=model.tree.find(t=>t.parent===null&&t.arm===arm),roots=model.tree.filter(t=>t.parent===null),source=t||roots[arm],c=model.n*model.scale/2,axis=model.axis+arm*Math.PI/3,dx=p[0]-c,dy=p[1]-c,L=roots.map(t=>t.length).sort((a,b)=>a-b)[3]*model.scale,ux=(dx*Math.cos(axis)+dy*Math.sin(axis))/L,uy=(-dx*Math.sin(axis)+dy*Math.cos(axis))/L,vx=(source.end[0]-source.start[0])*model.scale,vy=(source.end[1]-source.start[1])*model.scale;
+ const q=[source.start[0]*model.scale+ux*vx-uy*vy,source.start[1]*model.scale+ux*vy+uy*vx];let direction=null,best=null;
+ if(tangent){const u=(tangent[0]*Math.cos(axis)+tangent[1]*Math.sin(axis))/L,w=(-tangent[0]*Math.sin(axis)+tangent[1]*Math.cos(axis))/L;direction=[u*vx-w*vy,u*vy+w*vx];}
+ for(const edge of boundary(model)){const a=edge[0],b=edge[1],dx=b[0]-a[0],dy=b[1]-a[1],den=dx*dx+dy*dy;if(!den)continue;const u=Math.max(0,Math.min(1,((q[0]-a[0])*dx+(q[1]-a[1])*dy)/den)),pt=[a[0]+u*dx,a[1]+u*dy],d=Math.hypot(pt[0]-q[0],pt[1]-q[1]),alignment=direction?(dx*direction[0]+dy*direction[1])/(Math.sqrt(den)*Math.hypot(...direction)||1):1;
+  // Oppositely oriented nearby edges belong to the other side of a narrow
+  // branch or notch. Keep ordered boundary correspondence at those features.
+  if(model.boundaryEvidence&&alignment<-.2)continue;const score=d*(1+.3*(1-alignment));if(!best||score<best.score)best={d,pt,score};}
+ return best&&best.d<model.n*model.scale*.06?best.pt:q;
 }
-root.SilhouetteMesh={material,partition,project};if(typeof module!=='undefined')module.exports=root.SilhouetteMesh;
+// Find an actual fitted contour corner between ordered endpoint matches.
+// This supplies an optional extra facet, rather than snapping across a notch.
+function feature(model,a,b,arm,faithful=null){if(!model.boundaryEvidence)return null;const tangent=[b[0]-a[0],b[1]-a[1]],qa=faithful?faithful[0]:project(model,a,arm,tangent),qb=faithful?faithful[1]:project(model,b,arm,tangent),scale=model.n*model.scale/model.boundaryEvidence.size;let best=null;
+ function nearest(p,ring){let best=null;for(let i=0;i<ring.length;i++){const a=ring[i],b=ring[(i+1)%ring.length],dx=b[0]-a[0],dy=b[1]-a[1],den=dx*dx+dy*dy;if(!den)continue;const u=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dy)/den)),q=[a[0]+u*dx,a[1]+u*dy],distance=Math.hypot(p[0]-q[0],p[1]-q[1]);if(!best||distance<best.distance)best={i,u,q,distance};}return best;}
+ for(const original of model.boundaryEvidence.loops){const ring=original.map(p=>p.map(v=>v*scale)),x=nearest(qa,ring),y=nearest(qb,ring);if(!x||!y)continue;const score=x.distance+y.distance;if(!best||score<best.score)best={ring,x,y,score};}
+ if(!best)return null;const {ring,x,y}=best,dx=y.q[0]-x.q[0],dy=y.q[1]-x.q[1],den=dx*dx+dy*dy,L=Math.sqrt(den);if(L<5)return null;const candidates=[];let at=(x.i+1)%ring.length,previous=x.q,length=0,guard=0;if(x.i===y.i&&x.u<=y.u)return null;while(true){const p=ring[at];length+=Math.hypot(p[0]-previous[0],p[1]-previous[1]);candidates.push(p);previous=p;if(at===y.i)break;at=(at+1)%ring.length;if(++guard>ring.length)return null;}length+=Math.hypot(y.q[0]-previous[0],y.q[1]-previous[1]);if(length>L*2.5)return null;let found=null;
+ for(const p of candidates){const u=((p[0]-x.q[0])*dx+(p[1]-x.q[1])*dy)/den,signed=(dx*(p[1]-x.q[1])-dy*(p[0]-x.q[0]))/L,residual=Math.abs(signed);if(signed>=0||u<.12||u>.88||residual<2||residual>Math.max(8,L*.8))continue;if(!found||residual>found.residual)found={target:p,u,residual,priority:residual*L,contour:[x.q,...candidates,y.q]};}return found;
+}
+root.SilhouetteMesh={material,partition,project,feature};if(typeof module!=='undefined')module.exports=root.SilhouetteMesh;
 })(globalThis);

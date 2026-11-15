@@ -2,7 +2,7 @@ const $=id=>document.getElementById(id),N=768,work=document.createElement('canva
 const layers=new Set(['vector','image']),layerButtons={cut:'vector',structure:'branches',overlay:'image','crystal-layer':'crystal'};
 const references=ReferenceLibrary;
 const defaults={threshold:230,scale:90,angle:0,symmetry:0,detail:100,offset:0,round:0,gaps:0,holeDiameter:3,holeRim:1.5,holeNeck:1,size:100};
-function opts(){let o={};for(const k in defaults)o[k]=Number($(k).value);o.size=Math.max(20,Math.min(500,o.size||100));o.crystal=$('crystal').checked?100:0;o.hanger=$('hanger').checked;o.fill=$('fill').checked;o.islands=$('islands').checked;return o}
+function opts(){let o={};for(const k in defaults)o[k]=Number($(k).value);o.size=Math.max(20,Math.min(500,o.size||100));o.crystal=$('crystal').checked?100:0;o.crystalPreview=layers.has('crystal');o.hanger=$('hanger').checked;o.fill=$('fill').checked;o.islands=$('islands').checked;return o}
 function labels(){const o=opts();$('hanger-controls').hidden=!o.hanger;for(const k in defaults){if(!$(k+'Val'))continue;$(k+'Val').textContent=o[k]+(['offset','round','gaps','holeDiameter','holeRim','holeNeck'].includes(k)?' mm':k==='angle'?'°':['scale','symmetry','detail','crystal'].includes(k)?'%':'')}$('sizeLabel').textContent=o.size+' mm artboard';$('specimen').textContent=sourceName}
 function setCrop(){if(!original)return;sourceVersion++;modelCache=null;setCenterMode(false);crop=document.createElement('canvas');let sheet=$('layout').value==='sheet';const sw=original.width/(sheet?5:1),sh=original.height/(sheet?2:1);crop.width=Math.round(sw);crop.height=Math.round(sh);crop.getContext('2d').drawImage(original,sheet?(selected%5)*sw:0,sheet?Math.floor(selected/5)*sh:0,sw,sh,0,0,crop.width,crop.height);autoCenter();$('cells').hidden=false;document.querySelectorAll('#cells button').forEach((b,i)=>{const active=i===(sheet?selected:referenceIndex);b.classList.toggle('selected',active);b.setAttribute('aria-pressed',String(active))});if(sheet)sourceName=`Uploaded sheet · Crystal ${selected+1}`;render()}
 function autoCenter(){if(!crop)return;const n=192,c=document.createElement('canvas');c.width=c.height=n;const x=c.getContext('2d'),fit=n/Math.max(crop.width,crop.height),left=(n-crop.width*fit)/2,top=(n-crop.height*fit)/2;x.fillStyle=$('invert').checked?'black':'white';x.fillRect(0,0,n,n);x.drawImage(crop,left,top,crop.width*fit,crop.height*fit);const pixels=x.getImageData(0,0,n,n).data,a=new Uint8Array(n*n);for(let i=0;i<a.length;i++){let v=.2126*pixels[4*i]+.7152*pixels[4*i+1]+.0722*pixels[4*i+2];if($('invert').checked)v=255-v;a[i]=v<Number($('threshold').value)?1:0}const found=Flake.findCenter(a,n);center=found.found?[(found.x-left)/(crop.width*fit),(found.y-top)/(crop.height*fit)]:[.5,.5];manualCenter=false;$('center-status').textContent=found.found?'Center: auto-aligned across six arms':'Center not detected — tap the image';}
@@ -23,8 +23,8 @@ function render(){
    fitted=modelCache.value;
   }
   result=CutOutput.process(mask,N,o,fitted);
-  result.previewPolygons=fitted?.polygons||[];
-  $('crystal-stats').textContent=!fitted?(needModel?'No supported branch structure detected.':'Geometry is off.'):`${fitted.branchCount} branches`+(o.crystal?`${fitted.inferredBranchCount?` · ${fitted.inferredBranchCount} inferred`:""} · ${fitted.polygons.length} pieces (3–6 sides) · ${(fitted.match*100).toFixed(1)}% mask overlap · core ${fitted.hub.observed?'image-fitted':'inferred'}`:' · geometry is off');
+  result.previewPolygons=result.previewPolygons||[];
+  $('crystal-stats').textContent=!fitted?(needModel?'No supported branch structure detected.':'Geometry is off.'):`${fitted.branchCount} branches`+(result.crystalMesh?` · ${result.previewPolygons.length} material cells (3–6 sides)`: "")+(result.crystalMesh?` · core ${fitted.hub.observed?'image-fitted':'inferred'}`:'');
   previewBounds=Preview.fitBounds(imageMask,N,result.loops);paint();
   $('pathcount').textContent=result.loops.length+' closed '+(result.loops.length===1?'boundary':'boundaries')+(result.structuralVoids?' · '+result.structuralVoids+' structural voids':'');
   $('vertices').textContent=result.loops.reduce((s,p)=>s+p.length,0).toLocaleString()+' vertices';$('export').disabled=!result.loops.length;
@@ -36,7 +36,7 @@ function paint(){
  if(!result)return;
  $('preview').setAttribute('viewBox',previewBounds.join(' '));
  const image=layers.has('image')?`<g data-layer="image"><image href="${work.toDataURL('image/png')}" width="${N}" height="${N}"/></g>`:'';
- const polygons=layers.has('crystal')?'<defs><clipPath id="crystal-material"><path clip-rule="evenodd" d="'+Flake.path(result.crystalMaterial||[])+'"/></clipPath></defs><g data-layer="crystal" clip-path="url(#crystal-material)">'+(result.previewPolygons||[]).map(p=>`<path d="${Flake.path([p])}" fill="#dba94b" fill-opacity="0.09" stroke="#bd8c35" stroke-opacity=".65" stroke-width=".7"/>`).join('')+'</g>':'';
+ const polygons=layers.has('crystal')?'<g data-layer="crystal">'+(result.previewPolygons||[]).map(p=>`<path d="${Flake.path([p])}" fill="#dba94b" fill-opacity="0.09" stroke="#bd8c35" stroke-opacity=".65" stroke-width=".7"/>`).join('')+'</g>':'';
  const branches=layers.has('branches')?'<g data-layer="branches">'+(result.branches||[]).map(p=>`<path d="M${p[0].join(',')}L${p[1].join(',')}" stroke="#087cca" stroke-width="1.4" fill="none"/>`).join('')+'</g>':'';
  const vector=layers.has('vector')?`<g data-layer="vector"><path d="${Flake.path(result.loops)}" fill="none" stroke="${layers.has('image')?'#dc2850':'#16746c'}" stroke-width="1.2"/></g>`:'';
  $('preview').innerHTML=image+polygons+branches+vector+`<path d="M${N/2-12},${N/2}h24 M${N/2},${N/2-12}v24" stroke="#168c79" stroke-width="2"/>`;
