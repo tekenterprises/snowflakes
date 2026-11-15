@@ -1,0 +1,9 @@
+const assert=require('node:assert/strict'),E=require('../dist/image-evidence'),C=require('../dist/crystal');
+const n=192,c=n/2,pixels=new Uint8Array(n*n*4),holes=[];for(let k=0;k<4;k++)holes.push([c+35*Math.cos(k*Math.PI/3),c+35*Math.sin(k*Math.PI/3)]);
+for(let y=0;y<n;y++)for(let x=0;x<n;x++){let value=Math.hypot(x-c,y-c)<70?30:255;if(holes.some(([a,b])=>Math.hypot(x-a,y-b)<3))value=255;if(Math.hypot(x-c,y-c)<4)value=255;if(Math.hypot(x-(c-42),y-(c-24))<3)value=236;if(x===c+15&&y===c+15)value=255;const i=(y*n+x)*4;pixels.set([value,value,value,255],i);}
+const evidence=E.analyze(pixels,n,false,230),at=(mask,x,y)=>mask[Math.round(y)*n+Math.round(x)];
+assert.equal(evidence.accepted.length,5,'four repeated gaps and one substantial central gap');for(const [x,y] of holes)assert(at(evidence.holes,x,y));assert(!at(evidence.holes,c-42,c-24),'threshold-sensitive gap is repairable');assert(!at(evidence.holes,c+15,c+15),'single-pixel gap is repairable');
+for(let k=0;k<6;k++)assert(at(evidence.consensus,c+35*Math.cos(k*Math.PI/3),c+35*Math.sin(k*Math.PI/3)),'four-arm evidence preserves the complete radial void family');
+const broad=[[[c-85,c-85],[c+85,c-85],[c+85,c+85],[c-85,c+85]]],r=E.constrain(broad,evidence,100,0),open=C.raster(r.open,n),filled=C.raster(r.filled,n);for(const [x,y] of holes){assert(!at(open,x,y));assert(at(filled,x,y));}assert(!at(filled,c+80,c),'reject a clear invented protrusion');for(let i=0;i<filled.length;i++)if(filled[i])assert(evidence.outside[i]<=r.allowance+1,'bounded image departure');
+const symmetric=E.constrain(broad,evidence,100,100),sym=C.raster(symmetric.open,n);for(let k=0;k<6;k++)assert(!at(sym,c+35*Math.cos(k*Math.PI/3),c+35*Math.sin(k*Math.PI/3)),'full symmetry cannot erase a recurring void');
+console.log('Material evidence: recurring/large voids retained, weak/tiny gaps repairable, fill switch explicit, unsupported extensions bounded.');

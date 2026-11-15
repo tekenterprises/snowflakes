@@ -9,6 +9,7 @@ const S=typeof module!=='undefined'?require('./structural-model.js'):root.Struct
 const Shared=typeof module!=='undefined'?require('./shared-polygons.js'):root.SharedPolygons;
 const Mesh=typeof module!=='undefined'?require('./shared-mesh.js'):root.SharedMesh;
 const Core=typeof module!=='undefined'?require('./crystal-core.js'):root.CrystalCore;
+const Evidence=typeof module!=='undefined'?require('./image-evidence.js'):root.ImageEvidence;
 const Clipper=typeof module!=='undefined'?require('./vendor/clipper.js'):root.ClipperLib;
 function fit(pixels,size,intensity,invert=false,detail=100,symmetry=0,measured=null,threshold=230){
  const model=measured||B.extract(pixels,size,invert,symmetry,threshold);if(!model)return null;
@@ -31,7 +32,8 @@ function fit(pixels,size,intensity,invert=false,detail=100,symmetry=0,measured=n
  // Build only when a non-crystal symmetric cut requests it.
  let traceMask=null;
  const alignedTrace=()=>{if(!traceMask&&prepared.slots){const ribbons=Shared.trace(prepared,S.deform(prepared,detail,symmetry),symmetry);ribbons.push(traceHub.polygon);const clip=new Clipper.Clipper(),out=new Clipper.Paths();clip.AddPaths(ribbons.map(p=>(C.area(p)<0?p.slice().reverse():p).map(([x,y])=>({X:Math.round(x*1e4),Y:Math.round(y*1e4)}))),Clipper.PolyType.ptSubject,true);clip.Execute(Clipper.ClipType.ctUnion,out,Clipper.PolyFillType.pftNonZero,Clipper.PolyFillType.pftNonZero);traceMask=C.raster(out.map(p=>p.map(v=>[v.X/1e4,v.Y/1e4])),size)}return traceMask};
- return {alignedTrace,polygons,pieces,branches,loops,mask:C.raster(loops,size),match:union?intersection/union:0,axis:axis*180/Math.PI,source:prepared.source,hub,inferredBranchCount:tree.filter(t=>!t.observed).length,armCount:tree.filter(t=>t.parent===null).length,branchCount:tree.length,tree};
+ let materialCache=null;const material=fill=>{if(!materialCache)materialCache=Evidence.constrain(loops,Evidence.analyze(pixels,size,invert,threshold),detail,symmetry,axis);return fill?materialCache.filled:materialCache.open};
+ return {material,alignedTrace,polygons,pieces,branches,loops,mask:C.raster(loops,size),match:union?intersection/union:0,axis:axis*180/Math.PI,source:prepared.source,hub,inferredBranchCount:tree.filter(t=>!t.observed).length,armCount:tree.filter(t=>t.parent===null).length,branchCount:tree.length,tree};
 }
 root.ImageCrystal={fit};if(typeof module!=='undefined')module.exports=root.ImageCrystal;
 })(globalThis);

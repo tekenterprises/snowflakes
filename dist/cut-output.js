@@ -22,15 +22,16 @@ function clean(loops,fill,keepLargest){
 function process(mask,size,o,fitted=null){
  const geometry=o.crystal&&fitted;
  const settings={...o,islands:o.gaps>0?false:o.islands};
- let input=geometry?fitted.mask:mask,aligned=false;
+ const material=fitted?.material?fitted.material(o.fill):null,geometryLoops=material||fitted?.loops;
+ let input=geometry?(material?C.raster(material,size):fitted.mask):mask,aligned=false;
  if(!geometry&&o.symmetry>0&&fitted?.alignedTrace){const trace=fitted.alignedTrace();if(trace){aligned=true;const z=o.symmetry/100;if(z===1)input=trace;else{const original=o.fill?F.fillHoles(mask,size):mask,a=F.distance(original,size),b=F.distance(Uint8Array.from(original,v=>1-v),size),c=F.distance(trace,size),d=F.distance(Uint8Array.from(trace,v=>1-v),size);input=Uint8Array.from(mask,(_,i)=>(1-z)*(a[i]-b[i])+z*(c[i]-d[i])<=0?1:0)}}}
  const result=F.process(input,size,geometry?{...settings,detail:100,symmetry:0}:aligned?{...settings,symmetry:0}:settings);
  if(geometry){
   // Retain fitted edges without raster stair-steps, but never bypass cut settings.
-  if(o.offset===0&&o.round===0)result.loops=fitted.loops;
+  if(o.offset===0&&o.round===0)result.loops=geometryLoops;
   result.polygons=fitted.polygons;
  }
- if(fitted)result.branches=fitted.branches;
+ if(fitted){result.branches=fitted.branches;result.crystalMaterial=material||fitted.loops;}
  if(o.gaps>0)result.loops=Features.closeGaps(result.loops,o.gaps*size/o.size);
  if(o.symmetry===100&&result.loops.length)result.loops=E.enforce(result.loops,size,fitted?fitted.axis*Math.PI/180:E.axis(result.mask,size));
  const final=clean(result.loops,o.fill,o.islands);

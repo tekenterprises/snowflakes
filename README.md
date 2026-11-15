@@ -19,7 +19,7 @@ The compact interface keeps the version beside the title. Crystal geometry is an
 
 The original cut trace uses a 768 px artboard with thresholding, hole filling, component filtering, detail reduction, offset and rounding. Preview bounds include both the image subject and cut shape without changing export dimensions. Vector, Branches, Image, and Crystal geo are independent layer buttons. Any nonempty combination is allowed; the last visible layer cannot be switched off. Crystal geo displays polygon guides even when the separate “Use crystal geometry for cut” checkbox is off. Layer selection never changes the exported cut.
 
-## Image → shared structure → polygons (v28)
+## Image → shared structure → polygons (v29)
 
 `branch-structure.js` remains the image-only candidate detector. At up to 384 px, it measures six trunk axes and follows image geodesics, grayscale ridges, paired edges and medial clearance. Continuous junction searches locate each child on its parent. The detector rejects crossing lines and duplicate terminal edges. No reference numbers, annotated coordinates or specimen-specific corrections enter runtime code.
 
@@ -89,3 +89,9 @@ The shared-structure suite checks all ten references at three detail levels and 
 The v23 regressions cover five terminal caps and an open background gap at thresholds 217/245, a fine width feature present on just one of twelve corresponding profiles, registered fine-dendrite symmetry, and all 15 nonempty layer combinations. The fork test also exercises cap recovery. Reference overlays use Pillow resampling and are diagnostic approximations of browser pixels; browser/phone interaction QA remains unavailable.
 
 The shared-mesh suite independently checks polygon intersections with Clipper, equal bilateral/radial branch and cell definitions, stable vertex IDs across symmetry settings, one connected cut exterior, and exact reflection/60-degree rotation. The fixture-free mesh test also checks acyclic junction dependencies and that zero symmetry uses the fitted pose without an unintended fallback.
+
+### Material evidence (v29)
+
+The shared branch/polygon scaffold is fitted first. A separate full-resolution image evidence stage bounds the final material with a small detail-dependent allowance around the traced exterior. Substantial threshold-stable cavities and cavities repeated across at least three arms are retained when Fill interior holes is off. Full symmetry uses repeated cavity families; tiny or unstable gaps remain repairable. Polygon guides are clipped to the same material. The shared cell definitions remain unchanged; clipped material boundaries may have additional edges. Offsets, close gaps and the intentional hanger are applied afterward.
+
+Run `node tests/material-evidence.cjs` for fixture-free void/exterior checks, and `node tests/material-reference.cjs` with `/tmp/image-model-19.rgba` for photographic integration checks.

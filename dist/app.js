@@ -36,7 +36,7 @@ function paint(){
  if(!result)return;
  $('preview').setAttribute('viewBox',previewBounds.join(' '));
  const image=layers.has('image')?`<g data-layer="image"><image href="${work.toDataURL('image/png')}" width="${N}" height="${N}"/></g>`:'';
- const polygons=layers.has('crystal')?'<g data-layer="crystal">'+(result.previewPolygons||[]).map(p=>`<path d="${Flake.path([p])}" fill="#dba94b" fill-opacity="0.09" stroke="#bd8c35" stroke-opacity=".65" stroke-width=".7"/>`).join('')+'</g>':'';
+ const polygons=layers.has('crystal')?'<defs><clipPath id="crystal-material"><path clip-rule="evenodd" d="'+Flake.path(result.crystalMaterial||[])+'"/></clipPath></defs><g data-layer="crystal" clip-path="url(#crystal-material)">'+(result.previewPolygons||[]).map(p=>`<path d="${Flake.path([p])}" fill="#dba94b" fill-opacity="0.09" stroke="#bd8c35" stroke-opacity=".65" stroke-width=".7"/>`).join('')+'</g>':'';
  const branches=layers.has('branches')?'<g data-layer="branches">'+(result.branches||[]).map(p=>`<path d="M${p[0].join(',')}L${p[1].join(',')}" stroke="#087cca" stroke-width="1.4" fill="none"/>`).join('')+'</g>':'';
  const vector=layers.has('vector')?`<g data-layer="vector"><path d="${Flake.path(result.loops)}" fill="none" stroke="${layers.has('image')?'#dc2850':'#16746c'}" stroke-width="1.2"/></g>`:'';
  $('preview').innerHTML=image+polygons+branches+vector+`<path d="M${N/2-12},${N/2}h24 M${N/2},${N/2-12}v24" stroke="#168c79" stroke-width="2"/>`;
