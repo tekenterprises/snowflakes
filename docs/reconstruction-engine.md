@@ -1,4 +1,4 @@
-# Browser reconstruction engine (v36)
+# Browser reconstruction engine (v37)
 
 The default geometry path ports the approved shared prototype into browser-local
 JavaScript. There are no reference-number lookups, saved geometry downloads,
@@ -65,7 +65,40 @@ Partitions validate positive area, finite coordinates, direct finite supports,
 facet counts, overlap, and shared edge incidence before publication to the UI.
 Failures are reported; stale geometry cannot be exported. A cold image requires
 all image stages; manufacturing controls reuse reconstruction. Worker jobs coalesce
-to the latest settings. Geometry and raster caches are bounded and source-scoped.
+to the latest settings. Geometry and raster caches are bounded.
+
+## Processing and reuse
+
+The UI retains up to six decoded images (48 MiB estimated), three normalized
+rasters (24 MiB estimated), twelve center estimates, and six completed result
+DTOs (16 MiB estimated). Stable decoded-image and crop identities allow a return
+to a recent flake to reuse its completed geometry. Result keys include the
+artboard size, center override, settings, and required preview capabilities.
+These are conservative accounting limits, not measurements of browser heap size.
+
+Image selection invalidates outstanding export work before decoding begins. A
+new source cancels the primary worker and its helpers when processing is active.
+Generation and request checks reject late results. A failed upload restores the
+previous valid image; export always waits for the current source and settings.
+
+The UI owns a bounded pool of two to four sibling workers on machines that
+advertise enough logical processors. They fit the twelve local branch sides and
+prepare each side's initial material target. Source arrays are cloned, not
+transferred away from the coordinator. Deadline-sensitive crystal partition,
+repair, and finalization run serially in side order after helper preparation
+finishes. Helper failure retains completed work, stops the pool, and retries
+unfinished work serially. Browsers without worker support use the synchronous
+compatibility path.
+
+The image kernels reuse directed-edge hex evidence, registration sample terms,
+and conservative spatial indexes. Broad phases only reject candidates proven
+outside the original geometric tolerances; exact predicates and candidate order
+still decide acceptance. If a mapped supported-cell partition fails, a bounded
+straight-fan fallback and a visibility-ranked finite-anchor retry can recover a
+complete 3–6-facet subdivision. Existing successful searches keep their cells.
+The actual union, holes, direct supports, overlap, and incidence checks remain
+authoritative.
+No lower image resolution or per-reference optimization is used.
 
 ## Verification
 
@@ -78,6 +111,7 @@ prototype fixtures, never runtime geometry:
 node tests/reconstruction-framework.cjs --references
 node tests/reconstruction-branches.cjs --golden
 node tests/reconstruction-cells.cjs --references
+node tests/local-fit-pool.cjs --cell-refs=all
 node tests/reconstruction-integration.cjs --references 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
 ```
 

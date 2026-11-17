@@ -5,9 +5,10 @@ function node(){return {listeners:{},value:0,checked:false,style:{},classList:{t
 function get(id){if(!elements.has(id))elements.set(id,node());return elements.get(id)}
 const pixels=new Uint8Array(768*768*4).fill(255),ctx={fillRect(){},save(){},translate(){},rotate(){},drawImage(){},restore(){},getImageData(){return {data:pixels}}},model={},fitted={axis:29.95,branchCount:6,polygons:[[[0,0],[2,0],[0,2]]],match:1,hub:{observed:false},inferredBranchCount:0};
 const context=vm.createContext({ReferenceLibrary:require('../dist/references.js'),console,setTimeout,clearTimeout,Image:class{},document:{getElementById:get,createElement(tag){return tag==='canvas'?{...node(),getContext(){return ctx},toDataURL(){return ''}}:node()},querySelector:()=>node(),querySelectorAll:()=>[]},Flake:{path(){return ''}},BranchStructure:{extract(){return model}},ImageCrystal:{fit(){return fitted}},Preview:{fitBounds(){return [0,0,768,768]}},CutOutput:{process(mask,n,o,f){calls.push(f);options.push(o);return {loops:[[[0,0],[1,0],[0,1]]],components:1,removed:0,branches:[[[0,0],[1,1]]]}}}});
-for(const file of ['geometry-pipeline','geometry-client','app'])vm.runInContext(fs.readFileSync('dist/'+file+'.js','utf8'),context);
+// This suite inspects every CutOutput invocation; cache behavior is exercised separately.
+for(const file of ['geometry-pipeline','geometry-client','app']){vm.runInContext(fs.readFileSync('dist/'+file+'.js','utf8'),context);if(file==='geometry-client')vm.runInContext("const uncachedClient=GeometryClient.create;GeometryClient.create=o=>uncachedClient({...o,resultCacheBytes:0});",context);}
 get('symmetry').value=100;get('crystal').checked=false;get('fill').checked=get('islands').checked=true;
-vm.runInContext('crop={width:256,height:320};render()',context);
+vm.runInContext('sourceLoading=false;crop={width:256,height:320};render()',context);
 const ids=['cut','structure','overlay','crystal-layer'],names=['vector','branches','image','crystal'];
 for(let bits=1;bits<16;bits++){
  vm.runInContext(`layers.clear();${names.filter((_,i)=>bits&(1<<i)).map(name=>`layers.add('${name}');`).join('')}updateLayers()`,context);
@@ -24,7 +25,7 @@ get('crystal').checked=true;get('crystal').listeners.change();assert.equal(optio
 get('crystal').checked=false;get('crystal').listeners.change();assert.equal(options.at(-1).crystal,0);
 get('crystal').checked=true;vm.runInContext('crop=null',context);get('reset').onclick();assert.equal(get('crystal').checked,false);
 console.log('All 15 layer combinations, last-layer guard, independent toggles, cut/guide independence and geometry reset pass.');
-vm.runInContext('crop={width:256,height:320}',context);get('hanger').checked=true;get('hanger').listeners.change();
+vm.runInContext('sourceLoading=false;crop={width:256,height:320}',context);get('hanger').checked=true;get('hanger').listeners.change();
 assert.equal(options.at(-1).hanger,true);assert.equal(get('hanger-controls').hidden,false);
 assert.equal(options.at(-1).holeDiameter,3);assert.equal(options.at(-1).holeRim,1.5);assert.equal(options.at(-1).holeNeck,1);
 get('gaps').value=.4;vm.runInContext('render()',context);assert.equal(options.at(-1).gaps,.4);
@@ -32,5 +33,5 @@ get('hanger').checked=false;get('hanger').listeners.change();assert.equal(get('h
 get('hanger').checked=true;vm.runInContext('crop=null',context);get('reset').onclick();assert.equal(get('hanger').checked,false);assert.equal(get('gaps').value,0);
 console.log('Hanger controls, millimeter defaults, gap width and reset are wired to cut options.');
 
-get('symmetry').value=0;get('crystal').checked=false;get('hanger').checked=true;vm.runInContext("crop={width:256,height:320};render()",context);assert.strictEqual(calls.at(-1),fitted,'hanger must request the axis model even with geometry and guides off');assert(!get('status').textContent.startsWith('Could not trace'),'render should not catch an unexpected exception');
+get('symmetry').value=0;get('crystal').checked=false;get('hanger').checked=true;vm.runInContext("sourceLoading=false;crop={width:256,height:320};render()",context);assert.strictEqual(calls.at(-1),fitted,'hanger must request the axis model even with geometry and guides off');assert(!get('status').textContent.startsWith('Could not trace'),'render should not catch an unexpected exception');
 const beforeVisibility=calls.length;get('overlay').onclick();get('cut').onclick();get('cut').onclick();get('overlay').onclick();assert.equal(calls.length,beforeVisibility,'image/vector visibility only repaints the existing geometry');

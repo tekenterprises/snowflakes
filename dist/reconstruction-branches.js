@@ -15,16 +15,50 @@
   const now = () => typeof performance!=='undefined'?performance.now():Date.now();
   function raster(data,width,height) { return {data,width,height}; }
   function sample(a,x,y) {
-    x=clamp(x,0,a.width-1.001);y=clamp(y,0,a.height-1.001);
+    // Interior probes dominate local fitting. Preserve the clamp's inclusive
+    // zero, NaN propagation and upper bound without nested min/max calls.
+    if(x<=0)x=0;else if(x>a.width-1.001)x=Math.max(0,a.width-1.001);
+    if(y<=0)y=0;else if(y>a.height-1.001)y=Math.max(0,a.height-1.001);
     const ix=Math.floor(x),iy=Math.floor(y),fx=x-ix,fy=y-iy,i=iy*a.width+ix,d=a.data;
     return (d[i]*(1-fx)+d[i+1]*fx)*(1-fy)+(d[i+a.width]*(1-fx)+d[i+a.width+1]*fx)*fy;
   }
-  function inside(p,poly) {
+  // A conservative broad phase for one synchronous operation. Bounds are never
+  // attached to sides or cached across possible edits to the source polygon.
+  // For coordinates within this limit, crossError bounds subtraction/product
+  // roundoff conservatively. Tiny, concave and poorly conditioned polygons keep
+  // the original cross tests. The existing 1e-8 cross tolerance is unchanged.
+  const boundsLimit=1e6,crossError=128*Number.EPSILON*boundsLimit*boundsLimit;
+  function polygonBounds(poly){
+    if(poly.length<3||poly.length>32)return null;
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity,cx=0,cy=0;
+    for(const p of poly){if(!Number.isFinite(p[0])||!Number.isFinite(p[1])||Math.abs(p[0])>boundsLimit||Math.abs(p[1])>boundsLimit)return null;minX=Math.min(minX,p[0]);minY=Math.min(minY,p[1]);maxX=Math.max(maxX,p[0]);maxY=Math.max(maxY,p[1]);cx+=p[0]/poly.length;cy+=p[1]/poly.length;}
+    const a=poly[0],b=poly[1],c=poly[2],turn=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+    if(Math.abs(turn)<=crossError||Math.abs(cx)>boundsLimit||Math.abs(cy)>boundsLimit)return null;
+    const sign=Math.sign(turn);let lower=Infinity;
+    for(let i=0;i<poly.length;i++){const a=poly[i],b=poly[(i+1)%poly.length],ex=b[0]-a[0],ey=b[1]-a[1];
+      // Every nonincident vertex must lie strictly on the interior side. This
+      // excludes collinear edges and self intersections as well as concavity.
+      for(let j=0;j<poly.length;j++){if(j===i||j===(i+1)%poly.length)continue;const p=poly[j];if(sign*(ex*(p[1]-a[1])-ey*(p[0]-a[0]))<=crossError)return null;}
+      lower=Math.min(lower,sign*(ex*(cy-a[1])-ey*(cx-a[0]))-crossError);
+    }
+    if(lower<1)return null;
+    // Relaxing each half plane by epsilon is contained in a homothetic
+    // expansion around this interior point by 1+epsilon/lower. Include both
+    // arithmetic error and the original tolerance, then round bounds outward.
+    const pad=(1e-8+crossError)/lower*Math.max(maxX-cx,cx-minX,maxY-cy,cy-minY)+128*Number.EPSILON*boundsLimit;
+    return Object.freeze([minX-pad,minY-pad,maxX+pad,maxY+pad]);
+  }
+  function outsideBounds(x,y,bounds,footprint=0){
+    return bounds&&(x<bounds[0]-footprint||y<bounds[1]-footprint||x>bounds[2]+footprint||y>bounds[3]+footprint)&&Math.abs(x)<=boundsLimit-footprint&&Math.abs(y)<=boundsLimit-footprint;
+  }
+  function insideXY(x,y,poly,bounds){
+    if(outsideBounds(x,y,bounds))return false;
     let sign=0;
-    for(let i=0;i<poly.length;i++){const a=poly[i],b=poly[(i+1)%poly.length],cross=(b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]);
-      if(Math.abs(cross)<1e-8)continue; const s=Math.sign(cross);if(sign&&sign!==s)return false;sign=s;}
+    for(let i=0;i<poly.length;i++){const a=poly[i],b=poly[(i+1)%poly.length],cross=(b[0]-a[0])*(y-a[1])-(b[1]-a[1])*(x-a[0]);
+      if(Math.abs(cross)<1e-8)continue;const s=Math.sign(cross);if(sign&&sign!==s)return false;sign=s;}
     return true;
   }
+  function inside(p,poly,bounds){return insideXY(p[0],p[1],poly,bounds);}
   function rayExit(c,u,poly) {
     let exit=0;
     for(let i=0;i<poly.length;i++){const a=poly[i],b=poly[(i+1)%poly.length],ex=b[0]-a[0],ey=b[1]-a[1],den=u[0]*ey-u[1]*ex;
@@ -37,11 +71,11 @@
     const k=side.pixel/side.scale,c=side.center;
     return [c[0]+k*(y*side.u[0]+x*side.v[0]),c[1]+k*(y*side.u[1]+x*side.v[1])];
   }
-  function sampleSide(side,x,y,scale=side.scale) {
+  function sampleSide(side,x,y,scale=side.scale,bounds) {
     const k=side.pixel/scale,sx=side.center[0]+k*(y*side.u[0]+x*side.v[0]),sy=side.center[1]+k*(y*side.u[1]+x*side.v[1]);
     const geometric=x>=0&&y>=0&&x<=y*Math.tan(side.bisectorAngle)+1e-8&&sx>=0&&sy>=0&&sx<side.sourceSize-1&&sy<side.sourceSize-1;
     let valid=geometric;
-    if(valid)for(const dx of [-.75,.75])for(const dy of [-.75,.75])if(inside([sx+dx,sy+dy],side.sourceHex))valid=false;
+    if(valid&&!outsideBounds(sx,sy,bounds,.75))for(const dx of [-.75,.75])for(const dy of [-.75,.75])if(insideXY(sx+dx,sy+dy,side.sourceHex,bounds))valid=false;
     return {value:sample(side.sourceInk,sx,sy),geometric,valid};
   }
   function prepareSides(framework) {
@@ -57,20 +91,48 @@
     }
     return sides;
   }
-  function maskedMedian(values,valid,index,omit=-1){const a=[];for(let j=0;j<values.length;j++)if(j!==omit&&valid[j][index])a.push(values[j][index]);return [median(a),a.length];}
+  // The scratch buffer is owned by one synchronous extraction/alignment call.
+  // Stable insertion order matches the numeric Array.sort median for equal values.
+  function maskedMedian(values,valid,index,omit=-1,scratch=new Float64Array(values.length)){
+    let n=0;for(let j=0;j<values.length;j++)if(j!==omit&&valid[j][index]){const v=values[j][index];let k=n;while(k&&scratch[k-1]>v){scratch[k]=scratch[k-1];k--;}scratch[k]=v;n++;}
+    return [n?(n&1?scratch[n>>1]:(scratch[n/2-1]+scratch[n/2])/2):0,n];
+  }
+  function alignmentValid(side,sx,sy,bounds){
+    if(!(sx>=0&&sy>=0&&sx<side.sourceSize-1&&sy<side.sourceSize-1))return false;
+    if(outsideBounds(sx,sy,bounds,.75))return true;
+    for(let dx=-.75;dx<=.75;dx+=1.5)for(let dy=-.75;dy<=.75;dy+=1.5)if(insideXY(sx+dx,sy+dy,side.sourceHex,bounds))return false;
+    return true;
+  }
   function align(sides) {
-    const points=[];for(let y=0;y<360;y+=3)for(let x=0;x<260;x+=3)points.push([x,y]);
+    // Keep the original y-major point order and static support predicates. Points
+    // outside this domain never contribute to any trial's correlation score.
+    const points=[];for(let y=0;y<360;y+=3)for(let x=0;x<260;x+=3)if(y>40&&y<300&&x>6)points.push([x,y]);
+    const len=points.length,frames=sides.map(side=>{const x=new Float64Array(len),y=new Float64Array(len),geometric=new Uint8Array(len),tan=Math.tan(side.bisectorAngle);
+      for(let j=0;j<len;j++){const p=points[j];x[j]=p[1]*side.u[0]+p[0]*side.v[0];y[j]=p[1]*side.u[1]+p[0]*side.v[1];geometric[j]=+(p[0]<=p[1]*tan+1e-8);}
+      return {x,y,geometric,bounds:polygonBounds(side.sourceHex)};});
+    const values=sides.map(()=>new Float64Array(len)),valid=sides.map(()=>new Uint8Array(len)),counts=new Int32Array(len),scratch=new Float64Array(sides.length),support=new Int32Array(len),target=new Float64Array(len),trialValues=new Float64Array(len);
     let scales=sides.map(()=>1);const history=[];
     for(let iteration=0;iteration<4;iteration++){
-      const records=sides.map((s,i)=>points.map(p=>sampleSide(s,...p,scales[i]))),values=records.map(a=>a.map(v=>v.value)),valid=records.map(a=>a.map(v=>v.valid));
+      counts.fill(0);
+      sides.forEach((side,i)=>{const f=frames[i],k=side.pixel/scales[i],mask=valid[i],ink=values[i];
+        for(let j=0;j<len;j++){const sx=side.center[0]+k*f.x[j],sy=side.center[1]+k*f.y[j],ok=f.geometric[j]&&alignmentValid(side,sx,sy,f.bounds);mask[j]=+ok;if(ok){ink[j]=sample(side.sourceInk,sx,sy);counts[j]++;}}
+      });
       const next=scales.map((scale,i)=>{
-        const med=points.map((_,j)=>maskedMedian(values,valid,j,i)),trials=range(Math.max(.78,scale-.045),Math.min(1.28,scale+.045),(Math.min(1.28,scale+.045)-Math.max(.78,scale-.045))/18);
-        const samples=trials.map(t=>points.map(p=>sampleSide(sides[i],...p,t))),support=[];
-        for(let j=0;j<points.length;j++){const [x,y]=points[j];if(y>40&&y<300&&x>6&&med[j][1]>=6&&samples.every(a=>a[j].valid))support.push(j);}
-        if(support.length<120)return scale;
-        const target=support.map(j=>med[j][0]),tm=mean(target),ts=Math.max(.015,Math.sqrt(mean(target.map(v=>(v-tm)**2))));
+        const side=sides[i],f=frames[i],trials=range(Math.max(.78,scale-.045),Math.min(1.28,scale+.045),(Math.min(1.28,scale+.045)-Math.max(.78,scale-.045))/18),factors=trials.map(t=>side.pixel/t);let n=0;
+        for(let j=0;j<len;j++){
+          if(!f.geometric[j]||counts[j]-valid[i][j]<6)continue;
+          let ok=true;for(const k of factors)if(!alignmentValid(side,side.center[0]+k*f.x[j],side.center[1]+k*f.y[j],f.bounds)){ok=false;break;}
+          if(ok)support[n++]=j;
+        }
+        if(n<120)return scale;
+        let sum=0;for(let j=0;j<n;j++){target[j]=maskedMedian(values,valid,support[j],i,scratch)[0];sum+=target[j];}
+        const tm=sum/n;sum=0;for(let j=0;j<n;j++)sum+=(target[j]-tm)**2;const ts=Math.max(.015,Math.sqrt(sum/n));
         let best=-Infinity,chosen=scale;
-        samples.forEach((a,t)=>{const v=support.map(j=>a[j].value),vm=mean(v),vs=Math.max(.015,Math.sqrt(mean(v.map(x=>(x-vm)**2))));let score=0;for(let j=0;j<v.length;j++)score+=(v[j]-vm)/vs*(target[j]-tm)/ts;score/=v.length;if(score>best){best=score;chosen=trials[t];}});
+        trials.forEach((t,trial)=>{const k=factors[trial];let sum=0;
+          for(let j=0;j<n;j++){const index=support[j];trialValues[j]=sample(side.sourceInk,side.center[0]+k*f.x[index],side.center[1]+k*f.y[index]);sum+=trialValues[j];}
+          const vm=sum/n;sum=0;for(let j=0;j<n;j++)sum+=(trialValues[j]-vm)**2;const vs=Math.max(.015,Math.sqrt(sum/n));let score=0;
+          for(let j=0;j<n;j++)score+=(trialValues[j]-vm)/vs*(target[j]-tm)/ts;score/=n;if(score>best){best=score;chosen=t;}
+        });
         return chosen;
       });
       const norm=Math.exp(mean(next.map(Math.log)));scales=next.map(s=>s/norm);history.push(scales.slice());
@@ -82,16 +144,22 @@
     sides.forEach((s,i)=>s.scale=registration.scales[i]);
     let xmax=0,ymax=0;const n=framework.size-1,c=framework.center;
     for(const s of sides)for(const p of [[0,0],[n,0],[n,n],[0,n]]){const dx=p[0]-c[0],dy=p[1]-c[1];xmax=Math.max(xmax,(dx*s.v[0]+dy*s.v[1])*s.scale/s.pixel);ymax=Math.max(ymax,(dx*s.u[0]+dy*s.u[1])*s.scale/s.pixel);}
-    const width=Math.ceil(xmax)+2,height=Math.ceil(ymax)+2,len=width*height,ink=new Float32Array(len),count=new Uint8Array(len),valid=new Uint8Array(len),hexmask=new Uint8Array(len);
-    for(const s of sides){s.width=width;s.height=height;s.ink=new Float32Array(len);s.valid=new Uint8Array(len);s.geometric=new Uint8Array(len);s.localRootLimit=s.rootExit*s.scale/s.pixel;s.trunkTip=[0,Math.hypot(framework.trunks[s.arm].end[0]-c[0],framework.trunks[s.arm].end[1]-c[1])*s.scale/s.pixel];
+    const width=Math.ceil(xmax)+2,height=Math.ceil(ymax)+2,len=width*height,ink=new Float32Array(len),count=new Uint8Array(len),valid=new Uint8Array(len),hexmask=new Uint8Array(len),hexVotes=new Uint8Array(len);let materialX=0,materialY=0;
+    for(const s of sides){const sourceBounds=polygonBounds(s.sourceHex);s.width=width;s.height=height;s.ink=new Float32Array(len);s.valid=new Uint8Array(len);s.geometric=new Uint8Array(len);s.localRootLimit=s.rootExit*s.scale/s.pixel;s.trunkTip=[0,Math.hypot(framework.trunks[s.arm].end[0]-c[0],framework.trunks[s.arm].end[1]-c[1])*s.scale/s.pixel];
       s.hexPolygon=s.sourceHex.map(p=>{const dx=p[0]-c[0],dy=p[1]-c[1];return [(dx*s.v[0]+dy*s.v[1])*s.scale/s.pixel,(dx*s.u[0]+dy*s.u[1])*s.scale/s.pixel];});
-      for(let y=0;y<height;y++)for(let x=0;x<width;x++){const i=y*width+x,q=sampleSide(s,x,y);s.ink[i]=q.value;s.valid[i]=+q.valid;s.geometric[i]=+q.geometric;}
+      for(let y=0;y<height;y++)for(let x=0;x<width;x++){const i=y*width+x,q=sampleSide(s,x,y,s.scale,sourceBounds);s.ink[i]=q.value;s.valid[i]=+q.valid;s.geometric[i]=+q.geometric;if(s.geometric[i]&&s.ink[i]>.055){materialX=Math.max(materialX,x);materialY=Math.max(materialY,y);}}
     }
     // The median central exclusion uses six votes, in addition to the exact
     // footprint exclusion in each source slice. Local fits retain local masks.
-    const values=sides.map(s=>s.ink),masks=sides.map(s=>s.valid);let materialX=0,materialY=0;
-    for(let i=0;i<len;i++){const x=i%width,y=Math.floor(i/width);let votes=0;for(const side of sides){if(inside([x,y],side.hexPolygon))votes++;if(side.geometric[i]&&side.ink[i]>.055){materialX=Math.max(materialX,x);materialY=Math.max(materialY,y);}}hexmask[i]=+(votes>=6);
-      const q=hexmask[i]?[0,0]:maskedMedian(values,masks,i);ink[i]=q[0];count[i]=q[1];valid[i]=+(q[1]>=6&&!hexmask[i]);}
+    const values=sides.map(s=>s.ink),masks=sides.map(s=>s.valid),medianScratch=new Float64Array(sides.length);
+    // Only the proven expanded rectangle can receive an inside vote. Keep the
+    // original full scan when bounds or the query-coordinate proof are absent.
+    for(const side of sides){const bounds=polygonBounds(side.hexPolygon),bounded=bounds&&width-1<=boundsLimit&&height-1<=boundsLimit;
+      const xmin=bounded?Math.max(0,Math.ceil(bounds[0])):0,xmax=bounded?Math.min(width-1,Math.floor(bounds[2])):width-1,ymin=bounded?Math.max(0,Math.ceil(bounds[1])):0,ymax=bounded?Math.min(height-1,Math.floor(bounds[3])):height-1;
+      for(let y=ymin;y<=ymax;y++)for(let x=xmin;x<=xmax;x++){const i=y*width+x;if(hexVotes[i]<6&&insideXY(x,y,side.hexPolygon,bounds))hexVotes[i]++;}
+    }
+    for(let i=0;i<len;i++){hexmask[i]=+(hexVotes[i]>=6);
+      const q=hexmask[i]?[0,0]:maskedMedian(values,masks,i,-1,medianScratch);ink[i]=q[0];count[i]=q[1];valid[i]=+(q[1]>=6&&!hexmask[i]);}
     const displayWidth=Math.min(width,Math.max(225,materialX+24)),displayHeight=Math.min(height,Math.max(360,materialY+24));
     function crop(data){const out=new data.constructor(displayWidth*displayHeight);for(let y=0;y<displayHeight;y++)out.set(data.subarray(y*width,y*width+displayWidth),y*displayWidth);return out;}
     for(const side of sides){side.ink=crop(side.ink);side.valid=crop(side.valid);side.geometric=crop(side.geometric);side.width=displayWidth;side.height=displayHeight;}
@@ -263,19 +331,27 @@
       b.baselineGeometry={attachment:root,angle:b.angle,length:b.length,tip:tip.slice()};Object.assign(b,{attachment:proposed,angle,length,refinement:'paired_boundary_root',shaftMidpointCount:points.length,midpointResidualBefore:before,midpointResidualAfter:after,rootCorrection:proposed-root});
     }return result;
   }
-  function evaluateLocal(ink,mask,valid,R,A,L,prior){const s=Math.sin(A*D),c=Math.cos(A*D);let support=0,gap=0,run=0,center=0,pairedCount=0,width=0,vm=true;
-    for(let j=0;j<32;j++){const f=.12+.84*j/31,x=L*f*s,y=R+L*f*c,material=sample(mask,x,y)>.5;vm=vm&&sample(valid,x,y)>.99&&x>=0&&y>=0&&x<ink.width-1&&y<ink.height-1;support+=+material;if(!material){run++;gap=Math.max(gap,run);}else run=0;let left=0,right=0,liveleft=material,liveright=material;
+  function evaluateLocal(ink,mask,valid,R,A,L,prior,candidate=false){const s=Math.sin(A*D),c=Math.cos(A*D);let support=0,gap=0,run=0,center=0,pairedCount=0,width=0,vm=true,tipink;
+    // Candidate scores are read only when feasible. Check the unchanged guards
+    // first; an unsupported trial cannot win and needs no paired-width probes.
+    // Baseline evaluations retain every metric even when they are infeasible.
+    if(candidate){
+      for(let j=0;j<32;j++){const f=.12+.84*j/31,x=L*f*s,y=R+L*f*c;if(!(sample(valid,x,y)>.99&&x>=0&&y>=0&&x<ink.width-1&&y<ink.height-1))return {feasible:false};}
+      if(!(sample(valid,L*s,R+L*c)>.99))return {feasible:false};
+      tipink=mean([-2,0,2].map(off=>sample(ink,L*s+off*c,R+L*c-off*s)));if(!(tipink>.045))return {feasible:false};
+    }
+    for(let j=0;j<32;j++){const f=.12+.84*j/31,x=L*f*s,y=R+L*f*c,material=sample(mask,x,y)>.5;if(!candidate)vm=vm&&sample(valid,x,y)>.99&&x>=0&&y>=0&&x<ink.width-1&&y<ink.height-1;support+=+material;if(!material){run++;gap=Math.max(gap,run);}else run=0;let left=0,right=0,liveleft=material,liveright=material;
       for(let d=1;d<25;d++){liveleft=liveleft&&sample(mask,x-d*c,y+d*s)>.5;liveright=liveright&&sample(mask,x+d*c,y-d*s)>.5;left+=+liveleft;right+=+liveright;if(!liveleft&&!liveright)break;}
       if(material&&left<24&&right<24&&left+right>=3){center+=1-Math.abs(left-right)/Math.max(3,left+right);pairedCount++;}width+=Math.min(left,right);
     }
-    support/=32;gap/=32;center/=Math.max(1,pairedCount);const pairedFraction=pairedCount/32; width/=32;const ends=[-4,-2,0,2,4,6].map(q=>sample(mask,(L+q)*s,R+(L+q)*c)),terminal=(ends[0]+ends[1]+ends[2]-ends[3]-ends[4]-ends[5])/3,tipink=mean([-2,0,2].map(off=>sample(ink,L*s+off*c,R+L*c-off*s))),priorcost=.055*((R-prior.attachment)/14)**2+.04*((A-prior.angle)/4)**2+.04*((L/prior.length-1)/.20)**2;
+    support/=32;gap/=32;center/=Math.max(1,pairedCount);const pairedFraction=pairedCount/32; width/=32;const ends=[-4,-2,0,2,4,6].map(q=>sample(mask,(L+q)*s,R+(L+q)*c)),terminal=(ends[0]+ends[1]+ends[2]-ends[3]-ends[4]-ends[5])/3;if(!candidate)tipink=mean([-2,0,2].map(off=>sample(ink,L*s+off*c,R+L*c-off*s)));const priorcost=.055*((R-prior.attachment)/14)**2+.04*((A-prior.angle)/4)**2+.04*((L/prior.length-1)/.20)**2;
     const score=.45*support-.70*gap+.22*center*Math.min(1,pairedFraction/.55)+.10*Math.min(1,width/5)+.24*terminal-priorcost,feasible=vm&&sample(valid,L*s,R+L*c)>.99&&tipink>.045;
     return {score,feasible,photoSupport:support,longestBackgroundGap:gap,shaftCentering:center,pairedFraction,terminalEvidence:terminal};
   }
   function jointLocal(result,ink,valid,slots,localroot){const {out,family}=result,mask=closeMask(ink.data,ink.width,ink.height,.055,valid.data,false),old=out.map(b=>({...b}));
     for(let i=0;i<out.length;i++){const b=out[i],prior=old[i],root=prior.attachment,length=prior.length,angle=prior.angle;let lo=Math.max(localroot+2,root-20),hi=root+20;if(i)lo=Math.max(lo,(old[i-1].attachment+root)/2+2);if(i+1<out.length)hi=Math.min(hi,(old[i+1].attachment+root)/2-2);if(lo>hi)continue;
       const baseline=evaluateLocal(ink,mask,valid,root,angle,length,prior),roots=unique([...range(lo,hi,2),root]),angles=unique([...range(family-4,family+4),angle]),lengths=unique([length,...range(Math.max(.6*slots[i].length,.75*length),Math.min(1.4*slots[i].length,1.25*length),2)]);let best={R:root,A:angle,L:length,...baseline};
-      for(const R of roots)for(const A of angles)for(const L of lengths){const v=evaluateLocal(ink,mask,valid,R,A,L,prior);if(v.feasible&&(!best.feasible||v.score>best.score))best={R,A,L,...v};}
+      for(const R of roots)for(const A of angles)for(const L of lengths){const v=evaluateLocal(ink,mask,valid,R,A,L,prior,true);if(v.feasible&&(!best.feasible||v.score>best.score))best={R,A,L,...v};}
       let changed=best.feasible&&best.score>=baseline.score+.045;if(changed&&best.photoSupport+.025<baseline.photoSupport)changed=false;if(changed&&best.longestBackgroundGap>baseline.longestBackgroundGap+.001)changed=false;if(!changed)best={R:root,A:angle,L:length,...baseline};
       const a=best.A*D,reliable=best.feasible&&best.photoSupport>=.85&&best.longestBackgroundGap<=.125;b.previousGeometry={attachment:root,angle,length,tip:prior.tip.slice(),status:prior.status};Object.assign(b,{attachment:best.R,angle:best.A,length:best.L,tip:[best.L*Math.sin(a),best.R+best.L*Math.cos(a)],rootBounds:[Math.min(lo,root),Math.max(hi,root)],jointRefined:changed,jointScore:best.score,jointBaselineScore:baseline.score,status:reliable?'fitted':'inferred',reason:reliable?'local_photographic_axis':'incomplete_local_photographic_support'});
       const metrics=['photoSupport','longestBackgroundGap','shaftCentering','pairedFraction','terminalEvidence'];b.localEvidence=Object.fromEntries(metrics.map(k=>[k,best[k]]));b.priorEvidence=Object.fromEntries(metrics.map(k=>[k,baseline[k]]));
@@ -290,6 +366,12 @@
     const result=jointLocal(refineShafts(fitBaseline(m,mm,ink,valid,slots,common,side.localRootLimit),ink,valid,slots,side.localRootLimit),ink,valid,slots,side.localRootLimit);
     trimConnected(result.out,ink,valid,options.probe||((x,y)=>sampleSide(side,x,y)));return {branches:result.out,commonAngle:result.family};
   }
+  // Install a completed local result on its original side after either a
+  // synchronous fit or an asynchronous worker fit. Source coordinates and slot
+  // correspondence use this one shared path in both cases.
+  function applyLocalFit(side,fit){
+    side.commonAngle=fit.commonAngle;side.branches=fit.branches.map((b,i)=>({...b,id:'branch-'+i,slotId:i,sourceRoot:toSource(side,0,b.attachment),sourceTip:toSource(side,b.tip)}));return side;
+  }
   function analyze(framework,options={}){
     const started=now(),extracted=options.extracted||extract(framework,options),afterExtraction=now(),{master,sides}=extracted;
     const detected=options.masterBranches?{branches:options.masterBranches,common:options.commonAngle||60}:detectBranches(master);master.branches=recoverConsensus(master,sides,detected.branches);master.commonAngle=detected.common;master.pixel=sides[0].pixel;master.halfAngle=median(sides.map(s=>s.bisectorAngle));master.bisectorAngle=master.halfAngle;master.trunkTip=median(sides.map(s=>Array.isArray(s.trunkTip)?s.trunkTip[1]:s.trunkTip));master.trunkPoint=[0,master.trunkTip];
@@ -297,9 +379,9 @@
     // The representative outer hex is radially median, preserving six vertices.
     master.hexPolygon=range(0,5).map(i=>{const a=i*PI/3;const radii=sides.map(s=>rayExit([0,0],[Math.sin(a),Math.cos(a)],s.hexPolygon));const r=median(radii);return [r*Math.sin(a),r*Math.cos(a)];});
     const afterDetection=now();master.branches.forEach((b,i)=>{b.id='branch-'+i;b.slot=i;b.slotId=i;});
-    for(const side of sides){side.trunkPoint=Array.isArray(side.trunkTip)?side.trunkTip:[0,side.trunkTip];side.trunkTip=side.trunkPoint[1];side.halfAngle=side.bisectorAngle;const fit=options.localFit===false?{branches:master.branches.map(b=>({...b,tip:b.tip.slice(),status:'inferred'})),commonAngle:master.commonAngle}:fitSide(master,side,master.branches,master.commonAngle);side.commonAngle=fit.commonAngle;side.branches=fit.branches.map((b,i)=>({...b,id:'branch-'+i,slotId:i,sourceRoot:toSource(side,0,b.attachment),sourceTip:toSource(side,b.tip)}));}
+    for(const side of sides){side.trunkPoint=Array.isArray(side.trunkTip)?side.trunkTip:[0,side.trunkTip];side.trunkTip=side.trunkPoint[1];side.halfAngle=side.bisectorAngle;if(options.deferLocal){delete side.branches;delete side.commonAngle;continue;}const fit=options.localFit===false?{branches:master.branches.map(b=>({...b,tip:b.tip.slice(),status:'inferred'})),commonAngle:master.commonAngle}:fitSide(master,side,master.branches,master.commonAngle);applyLocalFit(side,fit);}
     return {framework,master,sides,registration:extracted.registration,timings:{extraction:afterExtraction-started,detection:afterDetection-afterExtraction,local:now()-afterDetection,total:now()-started}};
   }
-  const api={analyze,extract,align,prepareSides,sampleSide,toSource,sourceTransform:toSource,detectBranches,fitSide,trimConnected,sample,closeMask};
+  const api={analyze,extract,align,prepareSides,sampleSide,toSource,sourceTransform:toSource,detectBranches,fitSide,applyLocalFit,trimConnected,sample,closeMask};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;root.ReconstructionBranches=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

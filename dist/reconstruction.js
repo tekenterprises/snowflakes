@@ -44,9 +44,17 @@ function alignedMask(analysis,posed,z,threshold){
  }
  return out;
 }
-function create(){
+function create({localFit,cellFit}={}){
  let analysis=null;const meshes=new Map(),guides=new Map();
  function analyze(pixels,size,options={}){analysis=Branches.analyze(Framework.prepare(pixels,size,options));meshes.clear();guides.clear();return analysis;}
+ async function analyzeAsync(pixels,size,options={}){
+  if(!localFit)return analyze(pixels,size,options);
+  const next=Branches.analyze(Framework.prepare(pixels,size,options),{deferLocal:true}),started=Date.now();let fits;
+  try{fits=await localFit(next);if(!fits||fits.length!==next.sides.length)throw Error('Incomplete local fits');}
+  catch{fits=next.sides.map(side=>Branches.fitSide(next.master,side,next.master.branches,next.master.commonAngle));}
+  for(let i=0;i<next.sides.length;i++)Branches.applyLocalFit(next.sides[i],fits[i]);
+  const elapsed=Date.now()-started;next.timings.local+=elapsed;next.timings.total+=elapsed;analysis=next;meshes.clear();guides.clear();return analysis;
+ }
  function fit(options={},needMesh=true){
   if(!analysis)throw Error('No reconstruction analysis');const z=Math.max(0,Math.min(1,(options.symmetry||0)/100)),a=pose(analysis,z),f=a.framework;
   const branches=f.trunks.map(t=>[t.start,t.end]).concat(a.sides.flatMap(s=>s.branches.map(b=>[Branches.toSource(s,0,b.attachment),Branches.toSource(s,...b.tip)])));
@@ -55,7 +63,18 @@ function create(){
   if(needMesh){const key=JSON.stringify([z,options.fill!==false,options.detail??100]);let mesh=meshes.get(key);if(!mesh){const guideKey=JSON.stringify([options.fill!==false,options.detail??100,z===1]);let canonical=guides.get(guideKey);if(!canonical){canonical=Cells.buildCanonical(analysis,{...options,regular:z===1});guides.set(guideKey,canonical);while(guides.size>6)guides.delete(guides.keys().next().value)}mesh=z===1?canonicalMesh(analysis,canonical):Cells.build(a,{...options,canonical});meshes.set(key,mesh);while(meshes.size>3)meshes.delete(meshes.keys().next().value)}model.mesh=mesh;model.hexagons=mesh.hexagons;model.polygons=mesh.cells.map(c=>c.polygon);model.previewCells=mesh.cells;model.loops=mesh.baseCut.flatMap(p=>p);}
   return model;
  }
- return {analyze,fit};
+ async function fitAsync(options={},needMesh=true){
+  const z=Math.max(0,Math.min(1,(options.symmetry||0)/100));if(!cellFit||!needMesh||z===1)return fit(options,needMesh);
+  const key=JSON.stringify([z,options.fill!==false,options.detail??100]);if(meshes.has(key))return fit(options,needMesh);
+  const model=fit(options,false),a=model.analysis,guideKey=JSON.stringify([options.fill!==false,options.detail??100,false]);let canonical=guides.get(guideKey);
+  if(!canonical){canonical=Cells.buildCanonical(analysis,options);guides.set(guideKey,canonical);while(guides.size>6)guides.delete(guides.keys().next().value);}
+  const started=Date.now();let mesh;
+  let rows;try{rows=await cellFit(a,canonical,options);if(!Array.isArray(rows)||rows.length!==a.sides.length)throw Error('Incomplete crystal sides');}
+  catch(error){if(error.localFitAuthoritative)throw error;rows=null;mesh=Cells.build(a,{...options,canonical});}
+  if(rows){mesh=Cells.assemble(a,rows);mesh.canonical=canonical;mesh.diagnostics.elapsedMs=Date.now()-started;}
+  meshes.set(key,mesh);while(meshes.size>3)meshes.delete(meshes.keys().next().value);model.mesh=mesh;model.hexagons=mesh.hexagons;model.polygons=mesh.cells.map(c=>c.polygon);model.previewCells=mesh.cells;model.loops=mesh.baseCut.flatMap(p=>p);return model;
+ }
+ return {analyze,analyzeAsync,fit,fitAsync};
 }
 root.Reconstruction={create,pose,canonicalMesh};if(typeof module!=='undefined')module.exports=root.Reconstruction;
 })(globalThis);

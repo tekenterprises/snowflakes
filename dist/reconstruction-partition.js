@@ -55,9 +55,26 @@ function contact(input,supports,{insert=true}={}){
 }
 function conform(input){
  const vertices=[];
- const add=p=>{let id=vertices.findIndex(q=>distance(p,q)<=DISTANCE_TOLERANCE);if(id<0){id=vertices.length;vertices.push(p.slice())}return id};
+ // Welding must retain the first inserted point, including when several
+ // neighboring buckets contain eligible points. Two neighbors on each side
+ // also cover division rounding exactly at a tolerance-sized bucket boundary.
+ const weld=new Map(),unindexed=[];
+ const bucket=p=>{const x=Math.floor(p[0]/DISTANCE_TOLERANCE),y=Math.floor(p[1]/DISTANCE_TOLERANCE);return Number.isSafeInteger(x-2)&&Number.isSafeInteger(x+2)&&Number.isSafeInteger(y-2)&&Number.isSafeInteger(y+2)?[x,y]:null};
+ const add=p=>{const key=bucket(p);let id=-1;
+  if(key){for(let x=key[0]-2;x<=key[0]+2;x++){const column=weld.get(x);if(!column)continue;for(let y=key[1]-2;y<=key[1]+2;y++){const ids=column.get(y);if(ids)for(const candidate of ids)if((id<0||candidate<id)&&distance(p,vertices[candidate])<=DISTANCE_TOLERANCE)id=candidate}}for(const candidate of unindexed)if((id<0||candidate<id)&&distance(p,vertices[candidate])<=DISTANCE_TOLERANCE)id=candidate}
+  else id=vertices.findIndex(q=>distance(p,q)<=DISTANCE_TOLERANCE);
+  if(id<0){id=vertices.length;vertices.push(p.slice());if(key){let column=weld.get(key[0]);if(!column)weld.set(key[0],column=new Map());let ids=column.get(key[1]);if(!ids)column.set(key[1],ids=[]);ids.push(id)}else unindexed.push(id)}return id};
  let cells=input.map(c=>({...c,polygon:cleanSpurs(c.polygon).map(p=>vertices[add(p)])}));
- cells=cells.map(c=>{const ids=[];for(let i=0;i<c.polygon.length;i++){const a=c.polygon[i],b=c.polygon[(i+1)%c.polygon.length],dx=b[0]-a[0],dy=b[1]-a[1],length=Math.hypot(dx,dy);if(!length)continue;ids.push(add(a));const middle=vertices.map((p,id)=>({p,id,t:((p[0]-a[0])*dx+(p[1]-a[1])*dy)/length})).filter(v=>v.t>DISTANCE_TOLERANCE&&v.t<length-DISTANCE_TOLERANCE&&onSegment(v.p,a,b)).sort((a,b)=>a.t-b.t);ids.push(...middle.map(v=>v.id))}const unique=ids.filter((id,i)=>id!==ids[(i+ids.length-1)%ids.length]);const polygon=cleanSpurs(unique.map(id=>vertices[id]));return {...c,polygon,vertices:polygon.map(add),facetCount:facetCount(polygon)}});
+ // Seam queries use a separate coarse grid, never the tiny welding grid.
+ // Extreme coordinates retain the linear path when their floating-point
+ // spacing approaches the geometric tolerance. Broad/sparse AABBs likewise
+ // scan points rather than traversing a potentially enormous empty rectangle.
+ const all=vertices.map((_,id)=>id),edgeGrid=new Map();let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity,safe=true;
+ for(const p of vertices){if(!finite(p)||Number.EPSILON*Math.max(Math.abs(p[0]),Math.abs(p[1]))>DISTANCE_TOLERANCE/16){safe=false;break}minX=Math.min(minX,p[0]);minY=Math.min(minY,p[1]);maxX=Math.max(maxX,p[0]);maxY=Math.max(maxY,p[1])}
+ const step=Math.max(DISTANCE_TOLERANCE,Math.max(maxX-minX,maxY-minY)/Math.max(1,Math.ceil(Math.sqrt(vertices.length))));
+ if(safe&&vertices.length)for(const id of all){const p=vertices[id],x=Math.floor((p[0]-minX)/step),y=Math.floor((p[1]-minY)/step);let column=edgeGrid.get(x);if(!column)edgeGrid.set(x,column=new Map());let ids=column.get(y);if(!ids)column.set(y,ids=[]);ids.push(id)}
+ const candidates=(a,b)=>{if(!safe)return all;const pad=2*DISTANCE_TOLERANCE,x0=Math.floor((Math.min(a[0],b[0])-pad-minX)/step),x1=Math.floor((Math.max(a[0],b[0])+pad-minX)/step),y0=Math.floor((Math.min(a[1],b[1])-pad-minY)/step),y1=Math.floor((Math.max(a[1],b[1])+pad-minY)/step);if((x1-x0+1)*(y1-y0+1)>vertices.length)return all;const ids=[];for(let x=x0;x<=x1;x++){const column=edgeGrid.get(x);if(!column)continue;for(let y=y0;y<=y1;y++){const found=column.get(y);if(found)ids.push(...found)}}return ids};
+ cells=cells.map(c=>{const ids=[];for(let i=0;i<c.polygon.length;i++){const a=c.polygon[i],b=c.polygon[(i+1)%c.polygon.length],dx=b[0]-a[0],dy=b[1]-a[1],length=Math.hypot(dx,dy);if(!length)continue;ids.push(add(a));const middle=candidates(a,b).map(id=>{const p=vertices[id];return {p,id,t:((p[0]-a[0])*dx+(p[1]-a[1])*dy)/length}}).filter(v=>v.t>DISTANCE_TOLERANCE&&v.t<length-DISTANCE_TOLERANCE&&onSegment(v.p,a,b)).sort((a,b)=>a.t-b.t||a.id-b.id);ids.push(...middle.map(v=>v.id))}const unique=ids.filter((id,i)=>id!==ids[(i+ids.length-1)%ids.length]);const polygon=cleanSpurs(unique.map(id=>vertices[id]));return {...c,polygon,vertices:polygon.map(add),facetCount:facetCount(polygon)}});
  return {cells,vertices};
 }
 return {DISTANCE_TOLERANCE,SOURCE_TOLERANCE,distance,finite,area,onSegment,cleanSpurs,simple,facetCount,contact,conform};
@@ -76,9 +93,17 @@ function weldPolygons(polygons){
  for(const p of polygons)for(const a of p)if(!points.some(b=>Math.hypot(a[0]-b[0],a[1]-b[1])<=WELD_TOLERANCE))points.push(a.slice());
  const canonical=a=>points.find(b=>Math.hypot(a[0]-b[0],a[1]-b[1])<=WELD_TOLERANCE);
  const rings=polygons.map(p=>p.map(canonical));
+ // Large welds query the narrower coordinate interval for each edge. Small
+ // pair welds retain the direct scan; indexing those costs more than it saves.
+ // This only rejects points outside a padded AABB: the original projection
+ // and perpendicular-distance tests below still decide every insertion.
+ const indexed=points.length>=64&&points.every(p=>p.every(Number.isFinite)&&Number.EPSILON*Math.max(Math.abs(p[0]),Math.abs(p[1]))<=WELD_TOLERANCE/16);
+ const sorted=indexed?[0,1].map(axis=>points.map((_,id)=>id).sort((a,b)=>points[a][axis]-points[b][axis]||a-b)):null;
+ const bound=(ids,axis,value,upper=false)=>{let lo=0,hi=ids.length;while(lo<hi){const mid=(lo+hi)>>>1,q=points[ids[mid]][axis];if(q<value||upper&&q===value)lo=mid+1;else hi=mid}return lo};
+ const candidates=(a,b)=>{if(!indexed)return points;const pad=2*WELD_TOLERANCE,bounds=[0,1].map(axis=>[Math.min(a[axis],b[axis])-pad,Math.max(a[axis],b[axis])+pad]),ranges=sorted.map((ids,axis)=>[bound(ids,axis,bounds[axis][0]),bound(ids,axis,bounds[axis][1],true)]),axis=ranges[0][1]-ranges[0][0]<=ranges[1][1]-ranges[1][0]?0:1;return sorted[axis].slice(...ranges[axis]).filter(id=>points[id][1-axis]>=bounds[1-axis][0]&&points[id][1-axis]<=bounds[1-axis][1]).sort((a,b)=>a-b).map(id=>points[id])};
  return rings.map(p=>{const result=[];for(let i=0;i<p.length;i++){
   const a=p[i],b=p[(i+1)%p.length],dx=b[0]-a[0],dy=b[1]-a[1],l2=dx*dx+dy*dy;if(l2<=WELD_TOLERANCE**2)continue;
-  const middle=points.map(q=>({q,t:((q[0]-a[0])*dx+(q[1]-a[1])*dy)/l2})).filter(({q,t})=>t>WELD_TOLERANCE/Math.sqrt(l2)&&t<1-WELD_TOLERANCE/Math.sqrt(l2)&&Math.abs((q[0]-a[0])*dy-(q[1]-a[1])*dx)<=WELD_TOLERANCE*Math.sqrt(l2)).sort((a,b)=>a.t-b.t);
+  const middle=candidates(a,b).map(q=>({q,t:((q[0]-a[0])*dx+(q[1]-a[1])*dy)/l2})).filter(({q,t})=>t>WELD_TOLERANCE/Math.sqrt(l2)&&t<1-WELD_TOLERANCE/Math.sqrt(l2)&&Math.abs((q[0]-a[0])*dy-(q[1]-a[1])*dx)<=WELD_TOLERANCE*Math.sqrt(l2)).sort((a,b)=>a.t-b.t);
   result.push(a,...middle.map(x=>x.q));
  }return result.filter((a,i,all)=>!i||a!==all[i-1])});
 }
@@ -96,7 +121,14 @@ function sanitize(p){
   }
  }return p;
 }
-function adjacent(a,b){for(let i=0;i<a.length;i++){const p=a[i],q=a[(i+1)%a.length],dx=q[0]-p[0],dy=q[1]-p[1],l2=dx*dx+dy*dy;if(l2<1e-12)continue;
+function adjacent(a,b,cache){
+ // A true finite edge overlap has intersecting boxes within the existing
+ // 1e-5px perpendicular tolerance. A wider rejection pad covers round-off;
+ // extreme coordinates use the original predicate without this broad phase.
+ const bounds=p=>{if(cache?.has(p))return cache.get(p);let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;for(const q of p){if(!q.every(Number.isFinite)||Number.EPSILON*Math.max(Math.abs(q[0]),Math.abs(q[1]))>1e-5/16){cache?.set(p,null);return null}x0=Math.min(x0,q[0]);x1=Math.max(x1,q[0]);y0=Math.min(y0,q[1]);y1=Math.max(y1,q[1])}const value=[x0,y0,x1,y1];cache?.set(p,value);return value};
+ const aa=bounds(a),bb=bounds(b),pad=2e-5;
+ if(aa&&bb&&(aa[0]>bb[2]+pad||bb[0]>aa[2]+pad||aa[1]>bb[3]+pad||bb[1]>aa[3]+pad))return false;
+ for(let i=0;i<a.length;i++){const p=a[i],q=a[(i+1)%a.length],dx=q[0]-p[0],dy=q[1]-p[1],l2=dx*dx+dy*dy;if(l2<1e-12)continue;
  for(let j=0;j<b.length;j++){const r=b[j],s=b[(j+1)%b.length];if(Math.abs((r[0]-p[0])*dy-(r[1]-p[1])*dx)>1e-5*Math.sqrt(l2)||Math.abs((s[0]-p[0])*dy-(s[1]-p[1])*dx)>1e-5*Math.sqrt(l2))continue;
  const t=((r[0]-p[0])*dx+(r[1]-p[1])*dy)/l2,u=((s[0]-p[0])*dx+(s[1]-p[1])*dy)/l2;if(Math.min(1,Math.max(t,u))-Math.max(0,Math.min(t,u))>1e-7)return true;
  }}return false}
@@ -111,9 +143,9 @@ function touches(p,supports){
 }
 function convex(p){return p.every((a,i)=>{const b=p[(i+1)%p.length],c=p[(i+2)%p.length];return (b[0]-a[0])*(c[1]-b[1])-(b[1]-a[1])*(c[0]-b[0])>=-1e-7})}
 function clip(p,n,c){const out=[];for(let i=0;i<p.length;i++){const a=p[i],b=p[(i+1)%p.length],da=n[0]*a[0]+n[1]*a[1]-c,db=n[0]*b[0]+n[1]*b[1]-c;if(da>=-1e-8)out.push(a);if(da*db<-1e-12)out.push([a[0]+(b[0]-a[0])*da/(da-db),a[1]+(b[1]-a[1])*da/(da-db)])}return out}
-function propagateSupport(input,supports){
+function propagateSupport(input,supports,adjacencyBounds){
  const cells=input.slice(),graph=cells.map(()=>new Set()),rooted=cells.map(c=>!!touches(c.polygon,supports));
- for(let i=0;i<cells.length;i++)for(let j=0;j<i;j++)if(adjacent(cells[i].polygon,cells[j].polygon)){graph[i].add(j);graph[j].add(i)}
+ for(let i=0;i<cells.length;i++)for(let j=0;j<i;j++)if(adjacent(cells[i].polygon,cells[j].polygon,adjacencyBounds)){graph[i].add(j);graph[j].add(i)}
  let progress=true;while(progress){progress=false;
   for(let i=0;i<cells.length;i++){if(!cells[i]||rooted[i])continue;
    const options=[...graph[i]].filter(j=>cells[j]&&rooted[j]).sort((a,b)=>cells[a].polygon.length-cells[b].polygon.length);
@@ -175,6 +207,9 @@ function simplifyCoreContacts(p,tolerance,hex,seam){
 }
 function run(row,raw,tolerance=1.6,options={}){
  const ref='upload';
+ // Polygons are immutable throughout support propagation: merges replace
+ // arrays. Scope box reuse to this run, before later boundary insertion.
+ const adjacencyBounds=new WeakMap();
  if(options.hardSeeds!==undefined)HARD_SEEDS=options.hardSeeds;
  const n=row.n;
  const loops=F.contours(raw,n,options.preserveCore?0:Math.min(.6,tolerance)).map(p=>{if(options.preserveCore&&area(p)>0)return simplifyCoreContacts(p.map(([x,y])=>[x-.5,y-.5]),tolerance,row.localHex,[[0,0],[n*Math.tan(row.halfAngles[0]),n]]);const q=area(p)>0?F.simplify(p,tolerance):options.preserveCore?F.simplify(p,.6):p;return q.map(([x,y])=>[x-.5,y-.5])});
@@ -230,14 +265,14 @@ function run(row,raw,tolerance=1.6,options={}){
  // Merge unsupported fragments with adjacent supported material; never invent
  // a connector crossing a photographed opening. Concave completion cells are
  // allowed when a convex split would leave a detached cell.
- if(options.coarse)cells=propagateSupport(cells,supports);
+ if(options.coarse)cells=propagateSupport(cells,supports,adjacencyBounds);
  let pending=true;const discardedIsolated=[];
  while(pending){pending=false;let best=null;
   for(let i=0;i<cells.length;i++){
    if(touches(cells[i].polygon,supports))continue;pending=true;
    for(let j=0;j<cells.length;j++){if(i===j)continue;
     const a=cells[i].polygon,b=cells[j].polygon;
-    if(!adjacent(a,b))continue;
+    if(!adjacent(a,b,adjacencyBounds))continue;
     const pair=weldPolygons([a,b]),u=pc.union(...pair.map(subject));if(u.length!==1||u[0].length!==1)continue;
     let p=sanitize(clean(u[0][0]));if(area(p)<0)p.reverse();const support=touches(p,supports);
     const score=p.length+(support?0:1000)+.0001*area(p);
@@ -444,6 +479,26 @@ function valid(cells,target,supports){
  }catch{return false}
 }
 
+function straightFan(c,p,supports,alive){
+ // A boundary root can see a useful supported fan even when an earcut-based
+ // convex mapping introduces unnecessary bends. Only use visible finite
+ // chords; the complete union is certified by valid() before acceptance.
+ const n=p.length,seen=p.map((q,i)=>i===0||i===1||i===n-1||visible(p[0],q,p)),cost=Array(n).fill(Infinity),back=Array(n);cost[1]=0;
+ for(let i=1;i<n-1&&alive();i++){
+  if(!seen[i]||!Number.isFinite(cost[i]))continue;
+  for(let j=i+1;j<n&&j-i<=5;j++){
+   if(!seen[j])continue;
+   const polygon=N.simple([p[0],...p.slice(i,j+1)]);
+   if(polygon.length<3||polygon.length>6||N.area(polygon)<=1e-8)continue;
+   const contact=N.contact(polygon,supports);if(!contact)continue;
+   const value=cost[i]+1+polygon.length*.001;
+   if(value<cost[j]){cost[j]=value;back[j]={i,cell:{...c,polygon:contact.polygon,growthSupport:contact.support,kind:contact.support.kind,identity:contact.support.identity}}}
+  }
+ }
+ if(!back[n-1])return null;
+ const cells=[];for(let j=n-1;j>1;){const step=back[j];if(!step)return null;cells.push(step.cell);j=step.i}return cells;
+}
+
 function partition(c,supports,{budgetMs=80}={}){
  const deadline=Date.now()+budgetMs,alive=()=>Date.now()<deadline;
  const input=N.simple(c.polygon);
@@ -465,7 +520,43 @@ function partition(c,supports,{budgetMs=80}={}){
    }
   }
  }
- return best?{cells:best}:null;
+ if(best)return {cells:best};
+ // Preserve the complete mapped-search budget and every successful mapped
+ // subdivision. Only an exhausted search receives this separate, bounded
+ // structural fallback; no contour or area tolerance is changed.
+ const fastEnd=Date.now()+8,fastAlive=()=>Date.now()<fastEnd;
+ for(const root of roots){
+  if(!fastAlive())break;
+  const p=rootedRing(input,root);if(!p)continue;
+  const cells=straightFan(c,p,supports,fastAlive);
+  if(cells&&valid(cells,input,supports))return {cells};
+ }
+ // A long support has many valid anchors. The original support-fair order
+ // can spend its budget on distant endpoints before reaching the material's
+ // visible interior. On failure only, rank those same finite roots by visible
+ // original corners and try the unchanged mapped construction once more.
+ // Accept the first complete union-certified result; successful searches above
+ // keep their original cells, and no photographed boundary is coarsened here.
+ const retryEnd=Date.now()+80,retryAlive=()=>Date.now()<retryEnd,ranked=[];
+ for(let index=0;index<roots.length&&retryAlive();index++){
+  const root=roots[index];let count=0;for(const q of input)if(visible(root.point,q,input))count++;
+  ranked.push({root,count,index});
+ }
+ ranked.sort((a,b)=>b.count-a.count||a.index-b.index);
+ for(const {root}of ranked){
+  if(!retryAlive())break;
+  const p=rootedRing(input,root);if(!p)continue;
+  const rotations=[0,Math.floor(p.length/3),Math.floor(2*p.length/3),1,Math.floor(p.length/2)];
+  for(const rotation of [...new Set(rotations)]){
+   if(!retryAlive())break;
+   const edges=edgesFor(p,rotation);if(!edges)continue;
+   for(let mode=0;mode<3&&retryAlive();mode++)for(let shortcut=0;shortcut<3&&retryAlive();shortcut++){
+    const cells=fan(c,p,convexRing(p,mode),edges,supports,retryAlive,shortcut);
+    if(cells&&valid(cells,input,supports))return {cells};
+   }
+  }
+ }
+ return null;
 }
 
 return {partition};

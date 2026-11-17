@@ -67,14 +67,21 @@ function sideInput(analysis,side,sourceCells=[],options={}){
  const row={index:side.index,arm:side.arm,mirror:side.mirror,center:c.slice(),u:side.u.slice(),v:side.v.slice(),scale:side.scale,pixel:side.pixel,trunkTip:tip,n,branches,displayShape:[h,w],halfAngles:[side.bisectorAngle||Math.PI/6],localHex:hex,hexSupports:hex.map((p,i)=>({kind:'hex',identity:'central-hex',segment:[p,hex[(i+1)%hex.length]]})),imageBounds,sourceCells,sharedBranches:analysis.master?.branches||branches,voidAudit,discardedDisconnectedPixels:discardedPixels};
  return {row,raw};
 }
+// Parallel preparation stops before any deadline-sensitive search. The primary
+// consumes these first-attempt booleans and runs partition/repair in side order.
+function prepareSide(analysis,side,sourceCells=[],options={}){
+ const prepared=sideInput(analysis,side,sourceCells,options),detail=Math.max(0,Math.min(100,options.detail??100)),tolerance=options.coarseOnly?4:1.6+2.4*(1-detail/100);
+ try{prepared.base=W.run(prepared.row,prepared.raw,tolerance,{hardSeeds:tolerance<4,coarse:true,write:false,attempts:[],preserveCore:!!options.regular});}catch{prepared.base=null;}
+ return prepared;
+}
 function fitPrepared(row,raw,options={}){
- const attempts=[];let last;
+ const attempts=[];let last,prepared=options.preparedBase;
  // The original v4 coarse path is bounded and explicitly reports excluded
  // disconnected noise. No checkpoint or reference identity participates.
  const detail=Math.max(0,Math.min(100,options.detail??100)),initial=1.6+2.4*(1-detail/100);
  for(const tolerance of options.coarseOnly||initial>=4?[4]:[initial,4]){
   try{
-   const base=W.run(row,raw,tolerance,{hardSeeds:tolerance<4,coarse:true,write:false,attempts,preserveCore:!!options.regular});
+   const base=prepared&&prepared.index===row.index&&prepared.contourTolerance===tolerance?prepared:W.run(row,raw,tolerance,{hardSeeds:tolerance<4,coarse:true,write:false,attempts,preserveCore:!!options.regular});prepared=null;
    const trial=S.run(base,{budgetMs:options.partitionBudgetMs||3200});
    if(trial.failed.length)Repair.run(trial,base);
    const result=Final.run(trial,base);result.attempts=attempts;return result;
@@ -187,6 +194,6 @@ function build(analysis,options={}){
  const sides=(analysis.sides12||analysis.sides).map(side=>{const {row,raw}=sideInput(analysis,side,sourceCells,options);try{return fitPrepared(row,raw,options)}catch(error){error.sideIndex=side.index;throw error}});
  const result=assemble(analysis,sides,options);result.canonical=guide;result.diagnostics.elapsedMs=Date.now()-started;return result;
 }
-root.ReconstructionCells={build,buildCanonical,assemble,sideInput,fitPrepared,prepareMaster,morphology,components,sample,photographicMedian,geometry:P};
+root.ReconstructionCells={build,buildCanonical,assemble,sideInput,prepareSide,fitPrepared,prepareMaster,morphology,components,sample,photographicMedian,geometry:P};
 if(typeof module!=='undefined')module.exports=root.ReconstructionCells;
 })(typeof globalThis!=='undefined'?globalThis:this);

@@ -1,6 +1,7 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const Framework=require('../dist/reconstruction-framework.js');
+require('./hex-evidence-cache.cjs');
 // Portable unit checks run by default. Add --references (all twenty) or numeric
 // reference IDs for optional photographic integration checks. External paths
 // may be set with SNOWFLAKE_FIXTURES and SNOWFLAKE_PROTOTYPE (hex folder).

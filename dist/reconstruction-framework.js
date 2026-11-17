@@ -7,14 +7,16 @@
 'use strict';
 // Capture immutable intrinsic references once. Contextified worker globals
 // otherwise add a proxy lookup to every numeric evidence sample.
-const {Math,Date,Float32Array,Float64Array,Uint8Array,Int32Array,Array,Number}=root;
+const {Math,Date,Float32Array,Float64Array,Uint8Array,Int32Array,Array,Number,Map,Object}=root;
 const F=typeof module!=='undefined'?require('./engine.js'):root.Flake;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const mean=a=>a.reduce((s,v)=>s+v,0)/a.length;
 const median=a=>{const s=a.slice().sort((a,b)=>a-b),i=s.length>>1;return s.length%2?s[i]:(s[i-1]+s[i])/2};
 const now=()=>typeof performance!=='undefined'?performance.now():Date.now();
 function sample(a,n,x,y){const ix=Math.floor(x),iy=Math.floor(y),fx=x-ix,fy=y-iy;const get=(xx,yy)=>xx>=0&&yy>=0&&xx<n&&yy<n?a[yy*n+xx]:0;return get(ix,iy)*(1-fx)*(1-fy)+get(ix+1,iy)*fx*(1-fy)+get(ix,iy+1)*(1-fx)*fy+get(ix+1,iy+1)*fx*fy}
-function clipped(a,n,x,y){return sample(a,n,clamp(x,0,n-2),clamp(y,0,n-2))}
+// Clamping guarantees all four neighbors exist. Keep sample()'s four-term
+// arithmetic order, while avoiding its per-call closure and bounds checks.
+function clipped(a,n,x,y){const xx=clamp(x,0,n-2),yy=clamp(y,0,n-2),ix=Math.floor(xx),iy=Math.floor(yy),fx=xx-ix,fy=yy-iy,i=iy*n+ix;return a[i]*(1-fx)*(1-fy)+a[i+1]*fx*(1-fy)+a[i+n]*(1-fx)*fy+a[i+n+1]*fx*fy}
 function blur(a,n){const b=new Float32Array(a.length),c=new Float32Array(a.length),w=[1,4,6,4,1];for(let y=0;y<n;y++)for(let x=0;x<n;x++)for(let k=-2;k<=2;k++)b[y*n+x]+=a[y*n+clamp(x+k,0,n-1)]*w[k+2]/16;for(let y=0;y<n;y++)for(let x=0;x<n;x++)for(let k=-2;k<=2;k++)c[y*n+x]+=b[clamp(y+k,0,n-1)*n+x]*w[k+2]/16;return c}
 // Pillow's GaussianBlur approximation: three fractional box passes per axis,
 // rounding to 8-bit after each pass. L conversion uses Pillow's integer weights.
@@ -22,6 +24,15 @@ function grayscale(pixels,size,invert=false){const g=new Uint8Array(size*size);f
 function gaussianL(gray,n,sigma){
  if(sigma<=0)return gray.slice();const variance=sigma*sigma/3,l=Math.floor((Math.sqrt(12*variance+1)-1)/2),fraction=(2*l+1)*(l*(l+1)-3*variance)/(6*(variance-(l+1)*(l+1))),radius=l+fraction;
  const denominator=2*radius+1,inner=1/denominator,edge=fraction/denominator;let a=gray.slice();
+ // The image-scale sigmas use l=0: one center tap and two fractional edge
+ // taps. Separate axes remove per-pixel axis/clamp work without changing the
+ // six pass order, sum order, Uint8 quantization, or the larger-radius path.
+ if(l===0){
+  const before=new Int32Array(n),after=new Int32Array(n);for(let i=0;i<n;i++){before[i]=Math.max(0,i-1);after[i]=Math.min(n-1,i+1)}
+  for(let pass=0;pass<3;pass++){const b=new Uint8Array(a.length);for(let y=0;y<n;y++){const row=y*n;for(let x=0;x<n;x++){const i=row+x;let sum=0;sum+=a[i]*inner;sum+=(a[row+before[x]]+a[row+after[x]])*edge;b[i]=Math.floor(sum+.5)}}a=b}
+  for(let pass=0;pass<3;pass++){const b=new Uint8Array(a.length);for(let y=0;y<n;y++){const row=y*n,above=before[y]*n,below=after[y]*n;for(let x=0;x<n;x++){const i=row+x;let sum=0;sum+=a[i]*inner;sum+=(a[above+x]+a[below+x])*edge;b[i]=Math.floor(sum+.5)}}a=b}
+  return a;
+ }
  for(let axis=0;axis<2;axis++)for(let pass=0;pass<3;pass++){const b=new Uint8Array(a.length);for(let y=0;y<n;y++)for(let x=0;x<n;x++){let sum=0;for(let k=-l;k<=l;k++)sum+=a[axis?clamp(y+k,0,n-1)*n+x:y*n+clamp(x+k,0,n-1)]*inner;sum+=(a[axis?clamp(y-l-1,0,n-1)*n+x:y*n+clamp(x-l-1,0,n-1)]+a[axis?clamp(y+l+1,0,n-1)*n+x:y*n+clamp(x+l+1,0,n-1)])*edge;b[y*n+x]=Math.floor(sum+.5)}a=b}return a;
 }
 function imageInk(pixels,size,{invert=false,blur=.7}={}){return Float32Array.from(gaussianL(grayscale(pixels,size,invert),size,blur),v=>1-v/255)}
@@ -80,17 +91,36 @@ function refineTrunks(ink,n,center,trunks,threshold){
 function polygonValid(p,c){for(let k=0;k<6;k++){const a=p[k],b=p[(k+1)%6],d=p[(k+2)%6],ex=b[0]-a[0],ey=b[1]-a[1],fx=d[0]-b[0],fy=d[1]-b[1],cross=ex*fy-ey*fx,turn=Math.atan2(cross,ex*fx+ey*fy)*180/Math.PI;if(cross<=2||ex*(c[1]-a[1])-ey*(c[0]-a[0])<=0||Math.hypot(ex,ey)<=5||turn<=22||turn>=100)return false}return true}
 function nested(outer,inner){for(let k=0;k<6;k++){const a=outer[k],b=outer[(k+1)%6];for(const v of inner)if((b[0]-a[0])*(v[1]-a[1])-(b[1]-a[1])*(v[0]-a[0])<0)return false}return true}
 function familyCompatible(p,r,kept){return kept.every(h=>r>h.radius?nested(p,h.polygon):nested(h.polygon,p))}
+// The 25 ordered support flags fit exactly in an integer. Gap filling reads
+// only original flags: join endpoints two/three samples apart, then apply the
+// accepted count+4 cap. Bit operations replace temporary flag arrays only.
+function linkedSupportCount(support,count){const gap1=support&(support>>>2),gap2=support&(support>>>3);let linked=support|(gap1<<1)|(gap2<<1)|(gap2<<2),linkedCount=0;for(;linked;linked&=linked-1)linkedCount++;return Math.min(linkedCount,count+4)}
 function evidenceKernel(ink,n){
  const gx=new Float32Array(ink.length),gy=new Float32Array(ink.length);
  for(let y=0;y<n;y++)for(let x=0;x<n;x++){const i=y*n+x;gx[i]=x===0?ink[i+1]-ink[i]:x===n-1?ink[i]-ink[i-1]:(ink[i+1]-ink[i-1])/2;gy[i]=y===0?ink[i+n]-ink[i]:y===n-1?ink[i]-ink[i-n]:(ink[i+n]-ink[i-n])/2}
- function single(p,offset=0,bridge=true){const sides=[],coverage=[];for(let k=0;k<6;k++){const a=p[k],b=p[(k+1)%6],ex=b[0]-a[0],ey=b[1]-a[1],L=Math.max(.001,Math.hypot(ex,ey)),nx=-ey/L,ny=ex/L,support=new Uint8Array(25);let total=0,count=0;
+ // Reuse only within one coordinate-descent neighborhood. Four directed
+ // edges stay fixed when one vertex changes; each slot retains just its latest
+ // exact endpoints, with at most nine offsets and separate raw/bridged records.
+ // Radius/phase sweeps bypass the cache entirely. No sampled evidence is rounded.
+ let edgeCache=null;
+ function neighborhood(fn){const previous=edgeCache;edgeCache=Array(6);try{return fn()}finally{edgeCache=previous}}
+ function single(p,offset=0,bridge=true){const sides=[],coverage=[];for(let k=0;k<6;k++){const a=p[k],b=p[(k+1)%6];let slot,records,key;const mode=bridge?1:0;
+ if(edgeCache){
+  key=Object.is(offset,-0)?'-0':offset;slot=edgeCache[k];
+  if(!slot||!Object.is(slot.ax,a[0])||!Object.is(slot.ay,a[1])||!Object.is(slot.bx,b[0])||!Object.is(slot.by,b[1]))slot=edgeCache[k]={ax:a[0],ay:a[1],bx:b[0],by:b[1],offsets:new Map()};
+  records=slot.offsets.get(key);
+  if(records&&records[mode]){sides.push(records[mode][0]);coverage.push(records[mode][1]);continue}
+ }
+ const ex=b[0]-a[0],ey=b[1]-a[1],L=Math.max(.001,Math.hypot(ex,ey)),nx=-ey/L,ny=ex/L;let support=0,total=0,count=0;
  for(let j=0;j<25;j++){const u=.12+j*.76/24,qx=a[0]+u*ex+nx*offset,qy=a[1]+u*ey+ny*offset,v=clipped(ink,n,qx,qy),left=clipped(ink,n,qx+nx*2.5,qy+ny*2.5),right=clipped(ink,n,qx-nx*2.5,qy-ny*2.5),response=Math.max(Math.abs(left-right)*.65,Math.max(0,v-(left+right)/2));let aligned=false;
- for(let si=0;si<3;si++){const shift=-1.5+si*1.5,x=clipped(gx,n,qx+nx*shift,qy+ny*shift),y=clipped(gy,n,qx+nx*shift,qy+ny*shift),normal=Math.abs(x*nx+y*ny),tangent=Math.abs(x*ny-y*nx);if(normal>.025&&normal>tangent*2.5){aligned=true;break}}
- if(aligned&&response>.06){support[j]=1;total+=response;count++}}
- let linkedCount=count;if(bridge){const linked=support.slice();for(let gap=1;gap<=2;gap++)for(let j=0;j<25-gap-1;j++)if(support[j]&&support[j+gap+1])for(let d=1;d<=gap;d++)linked[j+d]=1;linkedCount=Math.min(linked.reduce((s,v)=>s+v,0),count+4)}sides.push(total/25);coverage.push(linkedCount/25)}
+ // Both gradient channels use the identical clamped point. Share only its
+ // coordinates/index; retain the bilinear arithmetic order for each channel.
+ for(let si=0;si<3;si++){const shift=-1.5+si*1.5,xx=clamp(qx+nx*shift,0,n-2),yy=clamp(qy+ny*shift,0,n-2),ix=Math.floor(xx),iy=Math.floor(yy),fx=xx-ix,fy=yy-iy,i=iy*n+ix,x=gx[i]*(1-fx)*(1-fy)+gx[i+1]*fx*(1-fy)+gx[i+n]*(1-fx)*fy+gx[i+n+1]*fx*fy,y=gy[i]*(1-fx)*(1-fy)+gy[i+1]*fx*(1-fy)+gy[i+n]*(1-fx)*fy+gy[i+n+1]*fx*fy,normal=Math.abs(x*nx+y*ny),tangent=Math.abs(x*ny-y*nx);if(normal>.025&&normal>tangent*2.5){aligned=true;break}}
+ if(aligned&&response>.06){support|=1<<j;total+=response;count++}}
+ const linkedCount=bridge?linkedSupportCount(support,count):count;const side=total/25,covered=linkedCount/25;if(slot){if(!records){records=[];if(slot.offsets.size===9)slot.offsets.delete(slot.offsets.keys().next().value);slot.offsets.set(key,records)}records[mode]=[side,covered]}sides.push(side);coverage.push(covered)}
  return {score:mean(sides.slice().sort((a,b)=>a-b).slice(0,4))+.08*mean(coverage),sides,coverage};}
  function ribbon(p,offsets,penalty=0){const records=offsets.map(o=>single(p,o,true)),sides=[],coverage=[];for(let k=0;k<6;k++){let best=-Infinity,index=0;for(let j=0;j<offsets.length;j++){const merit=records[j].sides[k]+.1*records[j].coverage[k]-penalty*Math.abs(offsets[j]);if(merit>best){best=merit;index=j}}sides.push(records[index].sides[k]);coverage.push(records[index].coverage[k])}return {score:mean(sides.slice().sort((a,b)=>a-b).slice(0,4))+.08*mean(coverage),sides,coverage}}
- return {single,evidence:(p,strict=false)=>strict?single(p,0,false):ribbon(p,[-3,-1.5,0,1.5,3]),band:(p,width)=>ribbon(p,Array.from({length:9},(_,i)=>-width+i*width/4),.002)};
+ return {single,neighborhood,evidence:(p,strict=false)=>strict?single(p,0,false):ribbon(p,[-3,-1.5,0,1.5,3]),band:(p,width)=>ribbon(p,Array.from({length:9},(_,i)=>-width+i*width/4),.002)};
 }
 const copy=p=>p.map(v=>v.slice());
 function polygonRadius(p,c){return mean(p.map(v=>Math.hypot(v[0]-c[0],v[1]-c[1])))}
@@ -105,7 +135,7 @@ function detectHexes(E,c,reach,trunks,strict=false){
  for(let lo=radii[0];lo<radii[radii.length-1];lo+=5)for(let family=0;family<2;family++){let best=-Infinity,seed=null;for(let pi=family*9;pi<(family+1)*9;pi++)for(let ri=0;ri<radii.length;ri++)if(radii[ri]>=lo&&radii[ri]<lo+5&&scores[pi][ri]>best){best=scores[pi][ri];seed=[radii[ri],phases[pi]]}if(seed)seeds.push(seed)}
  const candidates=[];
  for(const [radius,phase]of seeds){let p=regular(c,radius,phase),options=[];for(const x of [-2,0,2])for(const y of [-2,0,2])options.push(p.map(v=>[v[0]+x,v[1]+y]));p=argmax(options,q=>E.evidence(q,strict).score);const seed=copy(p);
- for(const step of [1.5,.75])for(let repeat=0;repeat<2;repeat++)for(let k=0;k<6;k++){options=[];for(const x of [-step,0,step])for(const y of [-step,0,step]){const q=copy(p);q[k][0]+=x;q[k][1]+=y;options.push(q)}p=argmax(options,q=>{const displacement=q.map((v,j)=>(v[0]-seed[j][0])**2+(v[1]-seed[j][1])**2);return Math.sqrt(Math.max(...displacement))>Math.max(3,radius*.07)||!polygonValid(q,c)?-1:E.evidence(q,strict).score-.07*mean(displacement)/Math.max(2,radius*.04)**2})}
+ for(const step of [1.5,.75])for(let repeat=0;repeat<2;repeat++)for(let k=0;k<6;k++){options=[];for(const x of [-step,0,step])for(const y of [-step,0,step]){const q=copy(p);q[k][0]+=x;q[k][1]+=y;options.push(q)}p=E.neighborhood(()=>argmax(options,q=>{const displacement=q.map((v,j)=>(v[0]-seed[j][0])**2+(v[1]-seed[j][1])**2);return Math.sqrt(Math.max(...displacement))>Math.max(3,radius*.07)||!polygonValid(q,c)?-1:E.evidence(q,strict).score-.07*mean(displacement)/Math.max(2,radius*.04)**2}))}
  if(!strict){const snapped=snapRidges(E,p,c),before=E.evidence(p),after=E.evidence(snapped),rb=E.single(p,0,false).coverage,ra=E.single(snapped,0,false).coverage;if((after.score>=before.score&&Math.min(...after.coverage)>=Math.min(...before.coverage))||(mean(ra)>=.88&&Math.min(...ra)>=.68&&mean(ra)>mean(rb)+.08))p=snapped}
  const ev=E.evidence(p,strict);if(!polygonValid(p,c)||Math.min(...ev.sides)<.04||Math.min(...ev.coverage)<.60||mean(ev.coverage)<(strict?.80:.88))continue;candidates.push({polygon:p,radius:polygonRadius(p,c),strong:strict,score:ev.score,sideContrast:ev.sides,sideCoverage:ev.coverage,rawSideCoverage:E.single(p,0,false).coverage});
  }
@@ -119,14 +149,14 @@ function inferredRadius(ink,n,c,dirs,reach,threshold){return clamp(reach*.07,10,
 
 function fitHexes(E,ink,n,c,trunks,threshold){const sorted=trunks.slice().sort((a,b)=>Math.atan2(a.end[1]-c[1],a.end[0]-c[0])-Math.atan2(b.end[1]-c[1],b.end[0]-c[0])),lengths=sorted.map(t=>Math.hypot(t.end[0]-c[0],t.end[1]-c[1])),dirs=sorted.map((t,k)=>[(t.end[0]-c[0])/lengths[k],(t.end[1]-c[1])/lengths[k]]),reach=median(lengths),polys=r=>dirs.map((d,k)=>[c[0]+d[0]*r[k],c[1]+d[1]*r[k]]);
  let detected=detectHexes(E,c,reach,trunks),strong=detected.filter(h=>h.strong).map(h=>h.radius),maximum=strong.length?Math.max(...strong):0;detected=detected.filter(h=>h.strong||h.radius<=maximum*1.6);let seeds=detected.map(h=>({r:rayHits(h.polygon,c,dirs),required:false}));if(!seeds.length)seeds=[{r:Array(6).fill(inferredRadius(ink,n,c,dirs,reach,threshold)),required:true}];const hexes=[];let previous=null;
- for(const record of seeds){const seed=record.r,lower=seed.map((v,k)=>Math.max(6,v*.8,previous?previous[k]+2:0)),upper=seed.map((v,k)=>Math.min(lengths[k],v*1.2));if(lower.some((v,k)=>v>upper[k]))continue;let r=seed.map((v,k)=>clamp(v,lower[k],upper[k]));const objective=q=>{const p=polys(q);if(!polygonValid(p,c))return -1e6;const average=mean(q);return E.evidence(p).score-.08*mean(q.map((v,k)=>((v-seed[k])/Math.max(3,seed[k]*.1))**2))-.03*mean(q.map(v=>(v/average-1)**2))};for(const step of [2,1,.5])for(let repeat=0;repeat<2;repeat++)for(let k=0;k<6;k++){const options=[-step,0,step].map(d=>{const q=r.slice();q[k]=clamp(q[k]+d,lower[k],upper[k]);return q});r=argmax(options,objective)}let polygon=polys(r);if(!polygonValid(polygon,c)){r=Array(6).fill(mean(seed));polygon=polys(r)}const ev=E.single(polygon,0,false),observed=!record.required&&Math.min(...ev.coverage)>=.60&&mean(ev.coverage)>=.80;hexes.push({polygon,radius:mean(r),radii:r,vertexArmIds:sorted.map(t=>t.arm),inferred:!observed,reason:record.required?'required hub inferred from bounded trunk-reach prior':'previous image outline fitted on fixed trunk rays',sideContrast:ev.sides,rawSideCoverage:ev.coverage,score:ev.score});previous=r}
+ for(const record of seeds){const seed=record.r,lower=seed.map((v,k)=>Math.max(6,v*.8,previous?previous[k]+2:0)),upper=seed.map((v,k)=>Math.min(lengths[k],v*1.2));if(lower.some((v,k)=>v>upper[k]))continue;let r=seed.map((v,k)=>clamp(v,lower[k],upper[k]));const objective=q=>{const p=polys(q);if(!polygonValid(p,c))return -1e6;const average=mean(q);return E.evidence(p).score-.08*mean(q.map((v,k)=>((v-seed[k])/Math.max(3,seed[k]*.1))**2))-.03*mean(q.map(v=>(v/average-1)**2))};for(const step of [2,1,.5])for(let repeat=0;repeat<2;repeat++)for(let k=0;k<6;k++){const options=[-step,0,step].map(d=>{const q=r.slice();q[k]=clamp(q[k]+d,lower[k],upper[k]);return q});r=E.neighborhood(()=>argmax(options,objective))}let polygon=polys(r);if(!polygonValid(polygon,c)){r=Array(6).fill(mean(seed));polygon=polys(r)}const ev=E.single(polygon,0,false),observed=!record.required&&Math.min(...ev.coverage)>=.60&&mean(ev.coverage)>=.80;hexes.push({polygon,radius:mean(r),radii:r,vertexArmIds:sorted.map(t=>t.arm),inferred:!observed,reason:record.required?'required hub inferred from bounded trunk-reach prior':'previous image outline fitted on fixed trunk rays',sideContrast:ev.sides,rawSideCoverage:ev.coverage,score:ev.score});previous=r}
  return {hexes,dirs,lengths,reach,polys,armIds:sorted.map(t=>t.arm)};
 }
 
 function interiorSupport(poly,gray,n){let total=0,on=0;const ymin=Math.max(0,Math.floor(Math.min(...poly.map(p=>p[1])))),ymax=Math.min(n-1,Math.ceil(Math.max(...poly.map(p=>p[1]))));for(let y=ymin;y<=ymax;y++){const hits=[];for(let k=0;k<6;k++){const a=poly[k],b=poly[(k+1)%6];if((a[1]<=y&&b[1]>y)||(b[1]<=y&&a[1]>y))hits.push(a[0]+(y-a[1])/(b[1]-a[1])*(b[0]-a[0]))}if(hits.length<2)continue;const lo=Math.max(0,Math.ceil(Math.min(...hits))),hi=Math.min(n-1,Math.floor(Math.max(...hits)));for(let x=lo;x<=hi;x++){total++;if(gray[y*n+x]<250)on++}}return total?on/total:0}
 function extendHexes(E,frame,c,gray,n,version){const {dirs,lengths,reach,polys,armIds}=frame,old=frame.hexes,r0=version===4?Math.min(...old.map(h=>h.radius)):Math.max(...old.map(h=>h.radius)),lo=version===4?r0+12:r0+Math.max(12,r0*.20),hi=version===4?Math.min(150,reach*.47):Math.min(240,reach*.70,Math.min(...lengths)*.80),proposals=[];
  for(let r=lo;r<hi;r++)proposals.push({r,score:E.evidence(polys(Array(6).fill(r))).score});proposals.sort((a,b)=>b.score-a.score);const seeds=[];for(const proposal of proposals){const radius=proposal.r;if(old.some(h=>Math.abs(radius-h.radius)<Math.max(10,h.radius*.08))||seeds.some(r=>Math.abs(radius-r)<7))continue;seeds.push(radius);if(seeds.length>=14)break}const candidates=[];
- for(const seed of seeds){let r=Array(6).fill(seed);const width=clamp(seed*.06,3,8),objective=q=>{const p=polys(q);return !polygonValid(p,c)?-1e6:E.band(p,width).score-.06*mean(q.map(v=>((v-seed)/Math.max(3,seed*.08))**2))};for(const step of [2,1,.5])for(let k=0;k<6;k++){r=argmax([-step,0,step].map(d=>{const q=r.slice();q[k]=clamp(q[k]+d,seed*.88,seed*1.12);return q}),objective)}const polygon=polys(r),radius=mean(r),ev=E.single(polygon,0,false),band=E.band(polygon,width),linked=band.coverage,direct=Math.min(...ev.coverage)>=.60&&mean(ev.coverage)>=.80,controlStep=Math.max(12,seed*.15),controls=[E.band(polys(r.map(v=>Math.max(6,v-controlStep))),width),E.band(polys(r.map(v=>v+controlStep)),width)],prominence=(band.score-mean(controls.map(e=>e.score)))/Math.max(.02,band.score),coherentPeak=Math.min(...linked)>=.55&&mean(linked)>=.68&&Math.min(...band.sides)>=.05&&Math.min(...ev.sides)>=.04&&prominence>=.25,sideProminence=band.sides.map((v,k)=>(v-(controls[0].sides[k]+controls[1].sides[k])/2)/Math.max(.02,v)),repeatablePeak=version===6&&Math.min(...linked)>=.55&&Math.min(...ev.sides)>=.05&&sideProminence.filter(v=>v>.15).length>=5&&Math.min(...sideProminence)>-.05&&mean(sideProminence)>.30,supported=repeatablePeak||coherentPeak||direct||(Math.min(...linked)>=.68&&mean(linked)>=.88&&Math.min(...band.sides)>=.06);
+ for(const seed of seeds){let r=Array(6).fill(seed);const width=clamp(seed*.06,3,8),objective=q=>{const p=polys(q);return !polygonValid(p,c)?-1e6:E.band(p,width).score-.06*mean(q.map(v=>((v-seed)/Math.max(3,seed*.08))**2))};for(const step of [2,1,.5])for(let k=0;k<6;k++){r=E.neighborhood(()=>argmax([-step,0,step].map(d=>{const q=r.slice();q[k]=clamp(q[k]+d,seed*.88,seed*1.12);return q}),objective))}const polygon=polys(r),radius=mean(r),ev=E.single(polygon,0,false),band=E.band(polygon,width),linked=band.coverage,direct=Math.min(...ev.coverage)>=.60&&mean(ev.coverage)>=.80,controlStep=Math.max(12,seed*.15),controls=[E.band(polys(r.map(v=>Math.max(6,v-controlStep))),width),E.band(polys(r.map(v=>v+controlStep)),width)],prominence=(band.score-mean(controls.map(e=>e.score)))/Math.max(.02,band.score),coherentPeak=Math.min(...linked)>=.55&&mean(linked)>=.68&&Math.min(...band.sides)>=.05&&Math.min(...ev.sides)>=.04&&prominence>=.25,sideProminence=band.sides.map((v,k)=>(v-(controls[0].sides[k]+controls[1].sides[k])/2)/Math.max(.02,v)),repeatablePeak=version===6&&Math.min(...linked)>=.55&&Math.min(...ev.sides)>=.05&&sideProminence.filter(v=>v>.15).length>=5&&Math.min(...sideProminence)>-.05&&mean(sideProminence)>.30,supported=repeatablePeak||coherentPeak||direct||(Math.min(...linked)>=.68&&mean(linked)>=.88&&Math.min(...band.sides)>=.06);
  if(!supported||!polygonValid(polygon,c))continue;if(old.length>1&&radius>Math.max(...old.map(h=>h.radius))*1.6&&!repeatablePeak)continue;const materialSupport=interiorSupport(polygon,gray,n);if(!direct&&materialSupport<.90)continue;if(!familyCompatible(polygon,radius,old))continue;candidates.push({polygon,radius,radii:r,vertexArmIds:armIds.slice(),inferred:!direct,reason:'shared outward image search from existing hub',sideContrast:ev.sides,rawSideCoverage:ev.coverage,linkedSideCoverage:linked,score:ev.score,added:true,...(version===6?{added_v6:true}:{}),bandWidth:width,bandSideContrast:band.sides,prominence,controlStep,coherentPeak,repeatablePeak,sideProminence,interiorMaterialSupport:materialSupport});
  }
  const kept=old.slice();for(const h of candidates.sort((a,b)=>b.score-a.score)){if(kept.some(k=>Math.abs(h.radius-k.radius)-(version===6?h.bandWidth/Math.cos(Math.PI/6):0)<Math.max(12,k.radius*.20)))continue;if(familyCompatible(h.polygon,h.radius,kept)){kept.push(h);break}}frame.hexes=kept.sort((a,b)=>a.radius-b.radius);return frame;

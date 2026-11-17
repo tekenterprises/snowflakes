@@ -13,13 +13,16 @@ The existing Cloudflare Worker is `snow-wizard`, configured by `wrangler.jsonc`.
 Follow [deployment instructions](docs/DEPLOYMENT.md) to publish an authorized
 release to the existing app. Preserve its account, routes, and access settings.
 
-## Reconstruction (v36)
+## Reconstruction (v37)
 
 The approved prototype now supplies the default center, straight trunks, nested
 central hexagons, median half-arm branch framework, individual side fits, and
 connected crystal cells. It analyzes fresh image pixels without catalogue-specific
 geometry. The actual crystal-cell union defines the base cut, including holes.
-See [engine stages and contracts](docs/reconstruction-engine.md).
+See [engine stages and contracts](docs/reconstruction-engine.md). Bounded caches
+reuse completed flakes; helper workers parallelize local branch fitting and
+material preparation. [Performance validation](docs/validation-v37.md) separates
+cold processing from cached returns and records the remaining latency limits.
 
 Vector, Branches, Image, and Crystal geo independently control visibility. At
 least one layer remains visible. “Use crystal geometry for cut” separately chooses

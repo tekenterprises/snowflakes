@@ -1,0 +1,18 @@
+const assert=require('node:assert/strict'),{create}=require('../dist/geometry-client');
+async function main(){
+ const workers=[],painted=[],errors=[],factory=()=>{const w={sent:[],postMessage(m){this.sent.push(m)},terminate(){this.dead=true}};workers.push(w);return w},source=key=>({key,size:2,centerOverride:[1,1],pixels:new Uint8ClampedArray(16)}),options={detail:100,threshold:230,crystal:100,crystalPreview:true};
+ const job=(name,patch={})=>({key:name+JSON.stringify(patch),source:source(name),options:{...options,...patch}}),client=create({workerFactory:factory,onResult:(r,q)=>painted.push([r,q.key]),onError:e=>errors.push(e)});
+ const doneA=client.request(job('A')),a=workers[0],messageA=a.onmessage,errorA=a.onerror;const doneB=client.request(job('B'));assert(a.dead);assert.equal(workers.length,2,'replacement source starts without waiting for A');assert.equal(await doneA,false);messageA({data:{id:1,result:'stale'}});errorA();assert.deepEqual(errors,[]);assert.deepEqual(painted,[]);
+ const b=workers[1],bId=b.sent[0].id;b.onmessage({data:{id:bId,result:{loops:[[[0,0],[1,0],[0,1]]],tag:'B'}}});assert((await doneB).tag==='B');
+ const doneC=client.request(job('C')),oldMessage=b.onmessage,oldError=b.onerror;const before=workers.length,cached=await client.request(job('B'));assert.equal(cached.tag,'B');assert.equal(await doneC,false);assert(b.dead);assert.equal(workers.length,before,'cache hit need not start a worker');assert.equal(client.isBusy(),false);oldMessage({data:{id:b.sent.at(-1).id,result:{tag:'C'}}});oldError();assert.equal(painted.at(-1)[0].tag,'B');assert.deepEqual(errors,[]);
+ assert.equal((await client.whenSettled()).tag,'B');assert.equal(client.cacheInfo().hits,1);
+ const changed=client.request(job('B',{crystalPreview:false})),w=workers.at(-1);assert(client.isBusy(),'exact preview capabilities must match');w.onmessage({data:{id:w.sent[0].id,result:{tag:'B-no-preview'}}});await changed;
+ const invalidated=client.request(job('D'));client.invalidate();assert.equal(await invalidated,false);assert.equal(await client.whenSettled(),false);assert.equal(client.isBusy(),false);
+ let calls=0;const fallback=create({workerFactory:()=>null,pipelineFactory:()=>({process:q=>({tag:q.source.key,n:++calls})}),resultCacheEntries:1});await fallback.request(job('A'));await fallback.request(job('A'));assert.equal(calls,1);await fallback.request(job('B'));await fallback.request(job('A'));assert.equal(calls,3,'LRU eviction causes a real recomputation');assert.equal(fallback.cacheInfo().entries,1);
+ const small=create({workerFactory:()=>null,pipelineFactory:()=>({process:()=>({large:'x'.repeat(1000)})}),resultCacheBytes:128});await small.request(job('A'));assert.equal(small.cacheInfo().entries,0,'oversized DTOs are not retained');
+ const centers=[],centerWorkers=[],centerClient=create({workerFactory:()=>{const w={sent:[],postMessage(m){this.sent.push(m)},terminate(){}};centerWorkers.push(w);return w}});
+ const centerA=job('same-pixels');let ready=centerClient.request(centerA),cw=centerWorkers[0];cw.onmessage({data:{id:cw.sent[0].id,result:{tag:'center-a'}}});await ready;
+ const centerB={...centerA,source:{...centerA.source,centerOverride:[1,2]}};ready=centerClient.request(centerB);assert(cw.sent.at(-1).request.source,'center override change resends source metadata');assert.deepEqual(cw.sent.at(-1).request.source.centerOverride,[1,2]);cw.onmessage({data:{id:cw.sent.at(-1).id,result:{tag:'center-b'}}});await ready;
+ console.log('Completed-result cache preserves capabilities, bounds memory, survives source cancellation and ignores retired worker success/errors.');
+}
+main().catch(e=>{console.error(e);process.exitCode=1});
