@@ -1,11 +1,11 @@
 /* Persistent computation stages shared by the background worker and fallback. */
 (function(root){
 'use strict';
-const defaults=typeof module!=='undefined'?{B:require('./branch-structure'),I:require('./image-crystal'),O:require('./cut-output'),P:require('./preview')}:{B:root.BranchStructure,I:root.ImageCrystal,O:root.CutOutput,P:root.Preview};
+const defaults=typeof module!=='undefined'?{B:require('./branch-structure'),I:require('./image-crystal'),O:require('./cut-output'),P:require('./preview'),R:require('./reconstruction')}:{B:root.BranchStructure,I:root.ImageCrystal,O:root.CutOutput,P:root.Preview,R:root.Reconstruction};
 function create(overrides={}){
- const {B,I,O,P}={...defaults,...overrides};
+ const {B,I,O,P,R}={...defaults,...overrides};
  let source=null,rawKey=null,mask=null,imageMask=null,measured=null,branchReady=false,lastKey=null,lastResult=null;
- const fits=new Map();
+ const fits=new Map(),reconstruction=R&&!overrides.B&&!overrides.I?R.create():null;
  function process(request){
   if(request.source&&request.source.key!==source?.key){source=request.source;rawKey=null;fits.clear();branchReady=false;lastKey=null;}
   if(!source?.pixels)throw Error('No source pixels available');
@@ -16,11 +16,11 @@ function create(overrides={}){
   const needModel=!!(o.crystal||o.symmetry||o.hanger||o.branchesPreview||o.crystalPreview);
   const finalKey=JSON.stringify([rawKey,o,needModel]);if(finalKey===lastKey)return lastResult;
   let fitted=null;
-  if(needModel){if(!branchReady){measured=B.extract(source.pixels,n,!!o.invert,0,o.threshold);branchReady=true;}const fitKey=JSON.stringify([o.detail,o.symmetry]);if(fits.has(fitKey)){fitted=fits.get(fitKey);fits.delete(fitKey);fits.set(fitKey,fitted);}else{fitted=measured?I.fit(source.pixels,n,100,!!o.invert,o.detail,o.symmetry,measured,o.threshold):null;fits.set(fitKey,fitted);while(fits.size>6)fits.delete(fits.keys().next().value);}}
+  if(needModel){if(!branchReady){measured=reconstruction?reconstruction.analyze(source.pixels,n,{invert:!!o.invert,threshold:o.threshold,centerOverride:source.centerOverride}):B.extract(source.pixels,n,!!o.invert,0,o.threshold);branchReady=true;}const fitKey=JSON.stringify([o.detail,o.symmetry,!!o.fill,!!(o.crystal||o.crystalPreview)]);if(fits.has(fitKey)){fitted=fits.get(fitKey);fits.delete(fitKey);fits.set(fitKey,fitted);}else{fitted=reconstruction?reconstruction.fit(o,!!(o.crystal||o.crystalPreview)):measured?I.fit(source.pixels,n,100,!!o.invert,o.detail,o.symmetry,measured,o.threshold):null;fits.set(fitKey,fitted);while(fits.size>6)fits.delete(fits.keys().next().value);}}
   const result=O.process(mask,n,o,fitted);
   // Functions and solver state stay in the worker. The UI receives only data it
   // paints/exports, avoiding copies of masks, topology, and diagnostic graphs.
-  lastResult={loops:result.loops,branches:result.branches||[],previewPolygons:result.previewPolygons||[],removed:result.removed,components:result.components,clipped:result.clipped,structuralVoids:result.structuralVoids||0,crystalMesh:result.crystalMesh?{roleCount:result.crystalMesh.roleCount}:null,modelInfo:fitted?{branchCount:fitted.branchCount,hub:{observed:fitted.hub.observed}}:null,needModel,previewBounds:P.fitBounds(imageMask,n,result.loops)};
+  lastResult={loops:result.loops,branches:result.branches||[],previewPolygons:result.previewPolygons||[],previewCells:(result.previewCells||[]).map(c=>({kind:c.kind,identity:c.identity,side:c.side})),hexagons:result.hexagons||[],center:result.center||[n/2,n/2],removed:result.removed,components:result.components,clipped:result.clipped,structuralVoids:result.structuralVoids||0,crystalMesh:result.crystalMesh?{roleCount:result.crystalMesh.roleCount}:null,modelInfo:fitted?{branchCount:fitted.branchCount,hub:{observed:fitted.hub.observed}}:null,needModel,previewBounds:P.fitBounds(imageMask,n,result.loops)};
   lastKey=finalKey;return lastResult;
  }
  return {process};

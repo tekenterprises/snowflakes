@@ -11,7 +11,7 @@ function create({onResult,onError,onBusy,workerFactory,pipelineFactory}={}){
   if(worker){const request={options:job.request.options},transfers=[];if(sourceKey!==job.request.source.key){const pixels=new Uint8ClampedArray(job.request.source.pixels);request.source={...job.request.source,pixels};transfers.push(pixels.buffer);sourceKey=request.source.key;}try{worker.postMessage({id:job.id,request},transfers);}catch{fallback();}}
   else{try{pipeline=pipeline||makePipeline();receive({id:job.id,result:pipeline.process(job.request)});}catch(error){receive({id:job.id,error:error.message||String(error)});}}
  }
- try{worker=workerFactory?workerFactory():typeof root.Worker==='function'?new root.Worker('geometry-worker.js?v=35'):null;}catch{worker=null;}
+ try{worker=workerFactory?workerFactory():typeof root.Worker==='function'?new root.Worker('geometry-worker.js?v=36'):null;}catch{worker=null;}
  function fallback(){worker?.terminate();worker=null;sourceKey=null;busy=false;pending=latest;drain();}
  if(worker){worker.onmessage=event=>receive(event.data);worker.onerror=fallback;}
  function request(value){const job={id:++revision,request:value};latest=job;pending=job;onBusy?.();drain();return new Promise(resolve=>{if(!busy&&!pending)resolve(true);else waiting.push(resolve);});}

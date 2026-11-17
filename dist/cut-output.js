@@ -31,7 +31,27 @@ function clean(loops,fill,keepLargest){
 }
 function subtract(loops,holes){if(!holes.length)return loops;const clip=new Clipper.Clipper(),out=new Clipper.Paths(),paths=ps=>ps.map(p=>p.map(([x,y])=>({X:Math.round(x*1e6),Y:Math.round(y*1e6)})));clip.AddPaths(paths(loops),Clipper.PolyType.ptSubject,true);clip.AddPaths(paths(holes),Clipper.PolyType.ptClip,true);clip.Execute(Clipper.ClipType.ctDifference,out,Clipper.PolyFillType.pftNonZero,Clipper.PolyFillType.pftNonZero);return out.map(p=>p.map(v=>[v.X/1e6,v.Y/1e6]));}
 function contains(loops,p){let inside=false;for(const ring of loops)for(let i=0,j=ring.length-1;i<ring.length;j=i++){const a=ring[i],b=ring[j];if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0])inside=!inside}return inside;}
+function reconstructionSymmetry(loops,size,axis,center){
+ const dx=size/2-center[0],dy=size/2-center[1];
+ return E.enforce(loops.map(r=>r.map(([x,y])=>[x+dx,y+dy])),size,axis).map(r=>r.map(([x,y])=>[x-dx,y-dy]));
+}
+function processReconstruction(mask,size,o,fitted){
+ const mesh=fitted.mesh,geometry=!!(o.crystal&&mesh),settings={...o,fill:false,symmetry:0,detail:100,islands:false};
+ let result;
+ if(geometry){const loops=fitted.loops;result=o.offset||o.round?F.process(C.raster(loops,size),size,settings):{loops,removed:0};}
+ else{result=process(fitted.sourceMask||mask,size,{...o,hanger:false,symmetry:0},null);}
+ if(geometry&&o.gaps>0)result.loops=Features.closeGaps(result.loops,o.gaps*size/o.size);
+ if(o.symmetry===100&&(!geometry||o.offset||o.round||o.gaps))result.loops=reconstructionSymmetry(result.loops,size,fitted.axis*Math.PI/180,fitted.center);
+ let selected=clean(result.loops,false,o.islands);result.loops=selected.loops;result.components=selected.components;result.removed=(result.removed||0)+selected.removed;
+ result.branches=fitted.branches;result.hexagons=fitted.hexagons;result.center=fitted.center;
+ result.previewPolygons=fitted.polygons||[];result.previewCells=fitted.previewCells||[];result.baseCrystalLoops=mesh?fitted.loops:null;result.crystalMesh=mesh?{roleCount:mesh.cells.length}:null;
+ result.structuralVoids=geometry?(mesh?.diagnostics?.cutHoles||0):(result.structuralVoids||0);
+ if(o.hanger&&result.loops.length){const axis=fitted.tree.reduce((a,b)=>!a||b.end[1]<a.end[1]?b:a,null);result.hanger=Features.hanger(result.loops,size,o.size,o.holeDiameter,o.holeRim,o.holeNeck,axis);selected=clean(result.hanger.loops,false,o.islands);result.loops=selected.loops;result.components=selected.components;result.removed+=selected.removed;}
+ result.mask=C.raster(result.loops,size);result.clipped=false;for(let x=0;x<size;x++)if(result.mask[x]||result.mask[(size-1)*size+x]||result.mask[x*size]||result.mask[x*size+size-1]){result.clipped=true;break;}
+ return result;
+}
 function process(mask,size,o,fitted=null){
+ if(fitted?.engine==='reconstruction-v36')return processReconstruction(mask,size,o,fitted);
  const geometry=o.crystal&&fitted;
  const maskEntries=perMask(structuralCache,mask,size);
  let structural=null,protectedMask=null;
