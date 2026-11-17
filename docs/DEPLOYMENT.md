@@ -39,8 +39,8 @@ not application runtime settings.
 
 After deployment, verify the returned Worker version/deployment ID and fetch the
 served HTML plus changed assets. Match their bytes/version to the committed
-source before reporting the webapp live. Browser automation is not authorized
-for this task; HTTP/static verification is distinct from browser interaction QA.
+source before reporting the webapp live. Record HTTP/static verification separately from any authorized browser
+interaction QA.
 
 The old owner-private Sites app is a separate deployment and is not updated by
 this command. No permission to modify unrelated Cloudflare resources is implied.
@@ -74,3 +74,30 @@ needs” was present and valid; no replacement token was required.
 - The workers.dev endpoint remains enabled and preview URLs disabled. Browser
   automation was not used; build, regression, deployment API, and HTTP checks are
   recorded separately in [v35 validation](VALIDATION-v35.md).
+
+
+## Verified v36 deployment — 2026-11-17
+
+- Live app: https://snow-wizard.evan-d6e.workers.dev/
+- Deployed application source: `600409c27ce681b95354dd3db8ddbb2e1a761fed`.
+- Worker version: `0e295409-fc50-43e0-b006-2fef611d114a`.
+- Deployment: `2f9e2534-7db0-4a44-86c4-363212a18a31`, 100% traffic.
+- All 61 public static files matched raw committed release bytes over HTTPS.
+  Verification completed at 2026-11-17T17:01:41Z. An initial license-file response
+  was stale during propagation; the complete final comparison passed.
+- The workers.dev endpoint remains enabled and preview URLs disabled, confirmed
+  through the scoped Worker API. No unrelated resources were changed.
+- The staged release candidate passed its static build and all 22 default suites.
+  All twenty references were checked through actual cell unions/cuts and symmetry
+  poses; see [v36 validation](VALIDATION-v36.md) for provenance and limitations.
+- Authorized browser checks confirmed v36, live reference-18 crystal reconstruction,
+  enabled export, and no captured browser warnings/errors. Local reference-17 SVG
+  export was parsed separately. The real live screenshot is a development artifact,
+  not a deployed application asset.
+
+For future releases, export the candidate from Git object bytes (for example,
+`git archive`) rather than a dirty working directory. Windows checkout EOL filters
+can convert files even in a staged-tree export; compare candidate assets with
+`git show COMMIT:dist/PATH` before upload. Build/test the isolated candidate and
+verify served bytes against that exact release. Documentation-only release records
+may follow in a separate commit without redeploying unchanged static assets.
