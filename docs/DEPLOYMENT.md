@@ -95,9 +95,33 @@ needs” was present and valid; no replacement token was required.
   export was parsed separately. The real live screenshot is a development artifact,
   not a deployed application asset.
 
-For future releases, export the candidate from Git object bytes (for example,
-`git archive`) rather than a dirty working directory. Windows checkout EOL filters
+For future releases, export the candidate directly from Git blobs (for example,
+`git show COMMIT:dist/PATH`) rather than a dirty working directory. Windows checkout EOL filters
 can convert files even in a staged-tree export; compare candidate assets with
 `git show COMMIT:dist/PATH` before upload. Build/test the isolated candidate and
 verify served bytes against that exact release. Documentation-only release records
 may follow in a separate commit without redeploying unchanged static assets.
+
+
+## Verified v37 deployment — 2026-11-17
+
+- Live app: https://snow-wizard.evan-d6e.workers.dev/
+- Deployed application source: `cd4d402a1baa9d39de53de143ad52e4003b15eb9`.
+- Worker version: `b7dc0e7b-46e0-441b-ba85-5a0327ae297c`.
+- Deployment: `bc450e50-a147-4dea-99e9-21acde1eefbb`, 100% traffic.
+- All 63 public static files matched the exact committed release bytes over HTTPS
+  at 2026-11-17T20:02:45Z. The root HTML also reports v37.
+- The workers.dev endpoint remains enabled and preview URLs disabled, verified
+  before and after deployment through the scoped Worker API. No unrelated
+  resources were changed.
+- The isolated release passed the static build, all 30 default suites, all twenty
+  references at symmetry 0/50/100, and all 240 parallel/serial side comparisons.
+  See [v37 validation and timings](validation-v37.md). The 2–3s cold-load target
+  remains unmet; the dense browser-input crystal replay still takes 27.58s.
+- Browser interaction QA and timing observations were performed locally before
+  deployment. Live verification used HTTPS asset comparisons and deployment API
+  checks; it did not establish new browser timing measurements.
+- This release used raw `git show` blob bytes. On this host, `git archive` also
+  applied checkout newline conversion; its output was normalized-equivalent but
+  did not match the committed bytes. The final raw-blob candidate was verified
+  independently and passed its build/default suite before upload.

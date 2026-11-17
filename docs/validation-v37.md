@@ -7,7 +7,8 @@ The optimized code retains the accepted image center, trunks, hexagons, branch
 slots, geometric predicates and photographic resolution. There are no runtime
 reference identities or per-specimen overrides. Unrelated preexisting edits are
 excluded from the commit; the release candidate is exported as raw Git bytes.
-This record describes code publication, not a Cloudflare deployment.
+The verified source was subsequently deployed to the existing Cloudflare Worker;
+see the [deployment record](DEPLOYMENT.md#verified-v37-deployment--2026-11-17).
 
 The changes add bounded decoded-image, raster, center and completed-result caches;
 source cancellation and export freshness guards; exact hex/registration/spatial
@@ -79,3 +80,14 @@ Diagnostic evidence is outside deployable assets in
 output comparisons, all-20 integration log, browser input captures, partition
 proofs and screenshots. Automated fixture rasterization and actual browser checks
 are distinct; browser canvas resampling can expose different partition cases.
+
+
+## Live release verification
+
+The deployed source is `cd4d402a1baa9d39de53de143ad52e4003b15eb9`.
+Worker version `b7dc0e7b-46e0-441b-ba85-5a0327ae297c` received 100% traffic
+in deployment `bc450e50-a147-4dea-99e9-21acde1eefbb`. At
+2026-11-17T20:02:45Z all 63 public files matched the committed raw release bytes
+and the root page reported v37. Existing access settings were preserved.
+These are HTTP/API release checks. The browser timings above are the earlier
+local measurements, not new measurements on the deployed site.
